@@ -1,0 +1,16 @@
+Source: ferrometer
+Section: admin
+Priority: optional
+Maintainer: Roman Kivalin <roman@shl.dev>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, protobuf-compiler
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: ferrometer
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, systemd
+Description: Lightweight telemetry collector
+ Ferrometer collects system metrics (CPU, memory, disk, network) and
+ forwards them via OTLP HTTP to backends like VictoriaMetrics. Feature-
+ flagged components keep the binary small. Designed as a lightweight
+ alternative to Grafana Alloy / OpenTelemetry Collector.

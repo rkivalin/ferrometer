@@ -1,0 +1,4 @@
+/target/
+/testing/
+/pkg/
+/ferrometer-*.pkg.tar.zst

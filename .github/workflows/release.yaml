@@ -1,0 +1,163 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add "${{ matrix.target }}"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Run tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked
+
+      - name: Package binary
+        run: |
+          cd "target/${{ matrix.target }}/release"
+          tar czf "../../../ferrometer-${{ matrix.arch }}.tar.gz" ferrometer
+          cd ../../..
+
+      - name: Build .deb
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          PKG=ferrometer_${VERSION}-1_${{ matrix.arch }}
+          mkdir -p "$PKG/DEBIAN"
+          mkdir -p "$PKG/usr/bin"
+          mkdir -p "$PKG/usr/lib/systemd/system"
+          mkdir -p "$PKG/etc/ferrometer"
+
+          install -Dm755 "target/${{ matrix.target }}/release/ferrometer" "$PKG/usr/bin/ferrometer"
+          install -Dm644 examples/ferrometer.service "$PKG/usr/lib/systemd/system/ferrometer.service"
+          install -Dm644 examples/config.toml "$PKG/etc/ferrometer/config.toml"
+
+          cat >"$PKG/DEBIAN/control" <<CTRL
+          Package: ferrometer
+          Version: ${VERSION}-1
+          Architecture: ${{ matrix.arch }}
+          Maintainer: Roman Kivalin <roman@shl.dev>
+          Depends: systemd
+          Section: admin
+          Priority: optional
+          Description: Lightweight telemetry collector
+           Ferrometer collects system metrics and forwards them via OTLP HTTP.
+          CTRL
+
+          echo "/etc/ferrometer/config.toml" >"$PKG/DEBIAN/conffiles"
+
+          dpkg-deb --build --root-owner-group "$PKG"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-${{ matrix.arch }}
+          path: |
+            ferrometer-${{ matrix.arch }}.tar.gz
+            *.deb
+
+  package-archlinux:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build package
+        run: |
+          pacman -Syu --noconfirm rustup protobuf
+
+          useradd -m builder
+          chown -R builder:builder .
+          su builder -c 'rustup toolchain install stable --profile minimal'
+          su builder -c 'makepkg --noconfirm'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: archlinux-package
+          path: "ferrometer-[0-9]*.pkg.tar.zst"
+
+  release:
+    needs: [build, package-archlinux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Extract changelog
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          sed -n "/^## ${VERSION} /,/^## [0-9]/{/^## [0-9]/d;p}" CHANGELOG.md \
+            | awk '
+              BEGIN { header=""; body="" }
+              /^### / {
+                if (header != "" && body != "") printf "%s\n\n%s", header, body
+                header = $0; body = ""
+                next
+              }
+              /^- / || /^  / { body = body $0 "\n"; next }
+              /^$/ { if (body != "") body = body "\n" }
+              END { if (header != "" && body != "") printf "%s\n\n%s", header, body }
+            ' | sed -e :a -e '/^\n*$/{$d;N;ba}' \
+            >/tmp/release-notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          mkdir release
+          cp artifacts/build-amd64/ferrometer-amd64.tar.gz release/
+          cp artifacts/build-arm64/ferrometer-arm64.tar.gz release/
+          cp artifacts/build-amd64/*.deb release/
+          cp artifacts/build-arm64/*.deb release/
+          cp artifacts/archlinux-package/*.pkg.tar.zst release/
+
+          cd release
+          sha256sum * >SHA256SUMS
+          cd ..
+
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "ferrometer ${VERSION}" \
+            --notes-file /tmp/release-notes.md \
+            release/*

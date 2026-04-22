@@ -1,0 +1,25 @@
+[Unit]
+Description=Ferrometer telemetry collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/ferrometer run
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+# Credentials
+# LoadCredentialEncrypted=otlp-password:/etc/credstore.encrypted/ferrometer-otlp-password
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+#!/usr/bin/make -f
+export CARGO_HOME = $(CURDIR)/debian/cargo_home
+export RUSTUP_TOOLCHAIN = stable
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --frozen
+
+override_dh_auto_test:
+	cargo test --release --frozen
+
+override_dh_auto_install:
+	install -Dm755 target/release/ferrometer debian/ferrometer/usr/bin/ferrometer
+	install -Dm644 examples/ferrometer.service debian/ferrometer/usr/lib/systemd/system/ferrometer.service
+	install -Dm644 examples/config.toml debian/ferrometer/etc/ferrometer/config.toml
+
+override_dh_auto_clean:
+	cargo clean || true

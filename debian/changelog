@@ -1,0 +1,10 @@
+ferrometer (0.1.0-1) unstable; urgency=low
+
+  * Initial release.
+  * Unix system metrics collector (CPU, memory, disk, filesystem, network, load, uname)
+  * OTLP HTTP forwarder with gzip compression and basic auth
+  * Feature-flagged components for minimal binary size
+  * TOML configuration
+  * Systemd service unit
+
+ -- Roman Kivalin <roman@shl.dev>  Tue, 22 Apr 2026 00:00:00 +0000

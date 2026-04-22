@@ -1,0 +1,50 @@
+# Ferrometer configuration
+#
+# All durations use suffix notation: "15s", "5m", "1h"
+
+[instance]
+# Unique name for this host. Added as "instance" label to all metrics.
+name = "myhost"
+
+# Metrics pipeline: collectors gather data, forwarders push it out.
+# Multiple collectors and forwarders can be configured.
+
+[metrics.collectors.system]
+type = "unix"
+
+# Collection interval (default: "15s")
+interval = "15s"
+
+# Regex filter for disk devices to monitor (default: common block devices)
+# Only devices matching this pattern will be reported.
+disk-devices = "^(nvme\\d+n\\d+|sd[a-z]+|vd[a-z]+)$"
+
+# Regex filter for network interfaces to monitor
+net-devices = "^(eth|en|wl|bond)"
+
+# Sub-collectors to enable (default: all)
+# Available: cpu, memory, disk, filesystem, netdev, loadavg, uname
+collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
+
+[metrics.forwarders.victoriametrics]
+type = "otlphttp"
+
+# OTLP HTTP endpoint. "/v1/metrics" is appended automatically if not present.
+endpoint = "http://metrics.example.com:8428/opentelemetry"
+
+# Basic auth credentials (optional)
+username = "write_myhost"
+
+# Path to file containing the password (one line, trimmed).
+# Supports systemd encrypted credentials via LoadCredentialEncrypted.
+password-file = "/run/credentials/ferrometer/otlp-password"
+
+# Compression: "gzip" (default) or "none"
+compression = "gzip"
+
+# HTTP request timeout (default: "30s")
+timeout = "30s"
+
+# Retry configuration for transient failures (5xx, network errors)
+retry-max = 3
+retry-interval = "5s"
