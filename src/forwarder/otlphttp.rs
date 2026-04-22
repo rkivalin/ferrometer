@@ -1,16 +1,17 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::io::Write;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use async_compression::tokio::bufread::GzipEncoder;
 use async_trait::async_trait;
 use base64::Engine;
-use flate2::Compression as GzCompression;
-use flate2::write::GzEncoder;
+use bytes::Bytes;
+use futures_util::stream;
 use prost::Message;
 use tokio::sync::Notify;
 use tokio::time::Instant;
+use tokio_util::io::{ReaderStream, StreamReader};
 
 use crate::config::{Compression, OtlphttpForwarderConfig};
 use crate::error::{Error, Result};
@@ -44,6 +45,15 @@ pub struct OtlphttpForwarder {
     state: Mutex<BufferState>,
     notify: Notify,
     shutdown: AtomicBool,
+}
+
+/// State threaded through the `stream::unfold` closure. Each poll emits one
+/// batch as a self-contained `ExportMetricsServiceRequest` with one
+/// `ResourceMetrics` entry; protobuf wire format concatenates them so the
+/// receiver sees an N-entry list.
+struct EncoderState {
+    popped: Arc<Vec<Vec<Metric>>>,
+    batch_idx: usize,
 }
 
 impl OtlphttpForwarder {
@@ -142,43 +152,44 @@ impl OtlphttpForwarder {
         if popped.is_empty() {
             return Ok(0);
         }
+        let total: usize = popped.iter().map(|b| b.len()).sum();
 
-        let refs: Vec<&Metric> = popped.iter().flat_map(|b| b.iter()).collect();
-        let total = refs.len();
+        // Share the popped batches with the body stream. The stream holds
+        // one Arc; we keep another so we can reclaim the Vec via try_unwrap
+        // after the send completes and requeue on failure.
+        let popped = Arc::new(popped);
+        let stream_popped = popped.clone();
 
-        let request = metrics_to_otlp(&refs);
-        let (body, is_gzip) = match encode_body(&request, &self.compression) {
-            Ok(b) => b,
-            Err(e) => {
-                self.requeue(popped);
-                return Err(e.to_string());
-            }
-        };
+        // The unfold closure is polled only when reqwest's body sink is ready
+        // for more bytes, so encoding happens inline with network writes.
+        // If the connection fails, the stream is dropped without ever being
+        // polled — zero wasted encoding work.
+        let body_stream = stream::unfold(
+            EncoderState {
+                popped: stream_popped,
+                batch_idx: 0,
+            },
+            |mut state| async move {
+                if state.batch_idx >= state.popped.len() {
+                    return None;
+                }
+                // Clone the inner Arc so we can borrow into the Vec while
+                // mutating state's cursor.
+                let batches = state.popped.clone();
+                let batch = &batches[state.batch_idx];
+                let request = build_slice_request(batch);
+                let bytes = Bytes::from(request.encode_to_vec());
+                state.batch_idx += 1;
+                Some((Ok::<Bytes, std::io::Error>(bytes), state))
+            },
+        );
 
-        match self.send_once(&body, is_gzip).await {
-            Ok(()) => {
-                tracing::debug!(
-                    forwarder = self.name,
-                    metrics = total,
-                    bytes = body.len(),
-                    "forwarded metrics"
-                );
-                Ok(total)
-            }
-            Err(e) => {
-                self.requeue(popped);
-                Err(e)
-            }
-        }
-    }
+        let is_gzip = matches!(self.compression, Compression::Gzip);
 
-    async fn send_once(&self, body: &[u8], is_gzip: bool) -> std::result::Result<(), String> {
         let mut req = self
             .client
             .post(&self.endpoint)
-            .header("Content-Type", "application/x-protobuf")
-            .body(body.to_vec());
-
+            .header("Content-Type", "application/x-protobuf");
         if is_gzip {
             req = req.header("Content-Encoding", "gzip");
         }
@@ -186,14 +197,46 @@ impl OtlphttpForwarder {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req.send().await.map_err(|e| e.to_string())?;
-        let status = resp.status();
-        if status.is_success() {
-            return Ok(());
-        }
+        // Wrap the stream in a gzip adapter if compression is enabled. The
+        // adapter chain is entirely lazy: StreamReader pulls from the unfold
+        // stream on demand, GzipEncoder compresses incrementally with
+        // dictionary state preserved across chunks, ReaderStream hands
+        // compressed bytes back to reqwest as they're produced.
+        let req = if is_gzip {
+            let reader = StreamReader::new(body_stream);
+            let gzipped = GzipEncoder::new(reader);
+            req.body(reqwest::Body::wrap_stream(ReaderStream::new(gzipped)))
+        } else {
+            req.body(reqwest::Body::wrap_stream(body_stream))
+        };
 
-        let body_text = resp.text().await.unwrap_or_default();
-        Err(format!("HTTP {status}: {body_text}"))
+        let send_result = req.send().await;
+
+        // reqwest has fully consumed (or dropped) the body stream by now,
+        // so the stream's Arc clone is released.
+        let popped = Arc::try_unwrap(popped)
+            .expect("body stream should have released its Arc by now");
+
+        match send_result {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::debug!(
+                    forwarder = self.name,
+                    metrics = total,
+                    "forwarded metrics"
+                );
+                Ok(total)
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let body_text = resp.text().await.unwrap_or_default();
+                self.requeue(popped);
+                Err(format!("HTTP {status}: {body_text}"))
+            }
+            Err(e) => {
+                self.requeue(popped);
+                Err(e.to_string())
+            }
+        }
     }
 }
 
@@ -248,7 +291,6 @@ impl Forwarder for OtlphttpForwarder {
                     tokio::select! {
                         _ = tokio::time::sleep(wait) => {}
                         _ = self.notify.notified() => {
-                            // Could be shutdown or new data; re-evaluate.
                             continue;
                         }
                     }
@@ -284,14 +326,14 @@ impl Forwarder for OtlphttpForwarder {
     }
 }
 
-fn metrics_to_otlp(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
+fn build_slice_request(slice: &[Metric]) -> ExportMetricsServiceRequest {
     let mut by_name: BTreeMap<&'static str, Vec<&Metric>> = BTreeMap::new();
-    for m in metrics {
+    for m in slice {
         by_name.entry(m.name).or_default().push(m);
     }
 
-    let mut otlp_metrics = Vec::new();
-    for (name, group) in &by_name {
+    let mut otlp_metrics = Vec::with_capacity(by_name.len());
+    for (name, group) in by_name {
         let metric_type = &group[0].metric_type;
         let data_points: Vec<NumberDataPoint> = group
             .iter()
@@ -319,7 +361,7 @@ fn metrics_to_otlp(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
         });
     }
 
-    let instance = metrics
+    let instance = slice
         .first()
         .and_then(|m| m.labels.get("instance"))
         .cloned()
@@ -337,26 +379,6 @@ fn metrics_to_otlp(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
             }],
             ..Default::default()
         }],
-    }
-}
-
-fn encode_body(
-    request: &ExportMetricsServiceRequest,
-    compression: &Compression,
-) -> Result<(Vec<u8>, bool)> {
-    let proto_bytes = request.encode_to_vec();
-    match compression {
-        Compression::Gzip => {
-            let mut encoder = GzEncoder::new(Vec::new(), GzCompression::default());
-            encoder
-                .write_all(&proto_bytes)
-                .map_err(|e| Error::Forwarder(format!("gzip compression failed: {e}")))?;
-            let compressed = encoder
-                .finish()
-                .map_err(|e| Error::Forwarder(format!("gzip finalize failed: {e}")))?;
-            Ok((compressed, true))
-        }
-        Compression::None => Ok((proto_bytes, false)),
     }
 }
 

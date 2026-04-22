@@ -14,7 +14,7 @@ panic = "abort"
 [features]
 default = ["collector-unix", "forwarder-otlphttp"]
 collector-unix = ["dep:procfs", "dep:regex", "dep:nix"]
-forwarder-otlphttp = ["dep:prost", "dep:prost-types", "dep:flate2", "dep:reqwest"]
+forwarder-otlphttp = ["dep:prost", "dep:prost-types", "dep:reqwest", "dep:futures-util", "dep:bytes", "dep:tokio-util", "dep:async-compression"]
 
 [dependencies]
 # CLI
@@ -44,8 +44,11 @@ nix = { version = "0.29", features = ["fs", "feature"], optional = true }
 # OTLP HTTP forwarder
 prost = { version = "0.13", optional = true }
 prost-types = { version = "0.13", optional = true }
-flate2 = { version = "1", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"], optional = true }
+futures-util = { version = "0.3", optional = true }
+bytes = { version = "1", optional = true }
+tokio-util = { version = "0.7", features = ["io"], optional = true }
+async-compression = { version = "0.4", features = ["tokio", "gzip"], optional = true }
 
 # Encoding (for basic auth)
 base64 = "0.22"
