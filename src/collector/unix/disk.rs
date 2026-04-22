@@ -1,9 +1,10 @@
 use regex::Regex;
 
+use crate::collector::unix::LabelCache;
 use crate::error::Result;
 use crate::signal::{Labels, Metric, MetricType};
 
-pub fn collect(filter: &Regex) -> Result<Vec<Metric>> {
+pub fn collect(cache: &mut LabelCache, filter: &Regex) -> Result<Vec<Metric>> {
     let stats = procfs::diskstats()
         .map_err(|e| crate::error::Error::Collector(format!("disk: {e}")))?;
     let mut metrics = Vec::new();
@@ -13,7 +14,7 @@ pub fn collect(filter: &Regex) -> Result<Vec<Metric>> {
             continue;
         }
 
-        let pairs: &[(&str, f64, MetricType)] = &[
+        let pairs: &[(&'static str, f64, MetricType)] = &[
             (
                 "node_disk_reads_completed_total",
                 disk.reads as f64,
@@ -56,12 +57,14 @@ pub fn collect(filter: &Regex) -> Result<Vec<Metric>> {
             ),
         ];
 
+        let mut labels = Labels::new();
+        labels.insert("device".into(), disk.name.clone());
+        let labels = cache.intern(labels);
+
         for (name, value, mtype) in pairs {
-            let mut labels = Labels::new();
-            labels.insert("device".into(), disk.name.clone());
             metrics.push(Metric {
-                name: (*name).to_string(),
-                labels,
+                name,
+                labels: labels.clone(),
                 value: *value,
                 timestamp: std::time::SystemTime::now(),
                 metric_type: mtype.clone(),

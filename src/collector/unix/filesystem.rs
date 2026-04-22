@@ -1,5 +1,6 @@
 use nix::sys::statvfs::statvfs;
 
+use crate::collector::unix::LabelCache;
 use crate::error::Result;
 use crate::signal::{Labels, Metric};
 
@@ -30,7 +31,7 @@ const IGNORED_FS_TYPES: &[&str] = &[
     "overlay",
 ];
 
-pub fn collect() -> Result<Vec<Metric>> {
+pub fn collect(cache: &mut LabelCache) -> Result<Vec<Metric>> {
     let mounts = procfs::mounts()
         .map_err(|e| crate::error::Error::Collector(format!("filesystem: {e}")))?;
     let mut metrics = Vec::new();
@@ -50,6 +51,7 @@ pub fn collect() -> Result<Vec<Metric>> {
         labels.insert("device".into(), mount.fs_spec.clone());
         labels.insert("mountpoint".into(), mount.fs_file.clone());
         labels.insert("fstype".into(), mount.fs_vfstype.clone());
+        let labels = cache.intern(labels);
 
         metrics.push(Metric::gauge(
             "node_filesystem_size_bytes",

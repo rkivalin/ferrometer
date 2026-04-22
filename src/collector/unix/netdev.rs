@@ -1,9 +1,10 @@
 use regex::Regex;
 
+use crate::collector::unix::LabelCache;
 use crate::error::Result;
 use crate::signal::{Labels, Metric};
 
-pub fn collect(filter: &Regex) -> Result<Vec<Metric>> {
+pub fn collect(cache: &mut LabelCache, filter: &Regex) -> Result<Vec<Metric>> {
     let devs = procfs::net::dev_status()
         .map_err(|e| crate::error::Error::Collector(format!("netdev: {e}")))?;
     let mut metrics = Vec::new();
@@ -15,8 +16,9 @@ pub fn collect(filter: &Regex) -> Result<Vec<Metric>> {
 
         let mut labels = Labels::new();
         labels.insert("device".into(), name.clone());
+        let labels = cache.intern(labels);
 
-        let counters: &[(&str, u64)] = &[
+        let counters: &[(&'static str, u64)] = &[
             ("node_network_receive_bytes_total", status.recv_bytes),
             ("node_network_receive_packets_total", status.recv_packets),
             ("node_network_receive_errs_total", status.recv_errs),
@@ -29,18 +31,11 @@ pub fn collect(filter: &Regex) -> Result<Vec<Metric>> {
             ("node_network_transmit_drop_total", status.sent_drop),
             ("node_network_transmit_fifo_total", status.sent_fifo),
             ("node_network_transmit_colls_total", status.sent_colls),
-            (
-                "node_network_transmit_carrier_total",
-                status.sent_carrier,
-            ),
+            ("node_network_transmit_carrier_total", status.sent_carrier),
         ];
 
         for &(metric_name, value) in counters {
-            metrics.push(Metric::counter(
-                metric_name,
-                value as f64,
-                labels.clone(),
-            ));
+            metrics.push(Metric::counter(metric_name, value as f64, labels.clone()));
         }
     }
 

@@ -1,9 +1,10 @@
 use nix::sys::utsname::uname;
 
+use crate::collector::unix::LabelCache;
 use crate::error::Result;
 use crate::signal::{Labels, Metric};
 
-pub fn collect() -> Result<Vec<Metric>> {
+pub fn collect(cache: &mut LabelCache) -> Result<Vec<Metric>> {
     let info =
         uname().map_err(|e| crate::error::Error::Collector(format!("uname: {e}")))?;
 
@@ -14,5 +15,5 @@ pub fn collect() -> Result<Vec<Metric>> {
     labels.insert("machine".into(), info.machine().to_string_lossy().into());
     labels.insert("nodename".into(), info.nodename().to_string_lossy().into());
 
-    Ok(vec![Metric::gauge("node_uname_info", 1.0, labels)])
+    Ok(vec![Metric::gauge("node_uname_info", 1.0, cache.intern(labels))])
 }

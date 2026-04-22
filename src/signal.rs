@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 pub type Labels = BTreeMap<String, String>;
@@ -11,17 +12,17 @@ pub enum MetricType {
 
 #[derive(Debug, Clone)]
 pub struct Metric {
-    pub name: String,
-    pub labels: Labels,
+    pub name: &'static str,
+    pub labels: Arc<Labels>,
     pub value: f64,
     pub timestamp: SystemTime,
     pub metric_type: MetricType,
 }
 
 impl Metric {
-    pub fn gauge(name: impl Into<String>, value: f64, labels: Labels) -> Self {
+    pub fn gauge(name: &'static str, value: f64, labels: Arc<Labels>) -> Self {
         Self {
-            name: name.into(),
+            name,
             labels,
             value,
             timestamp: SystemTime::now(),
@@ -29,9 +30,9 @@ impl Metric {
         }
     }
 
-    pub fn counter(name: impl Into<String>, value: f64, labels: Labels) -> Self {
+    pub fn counter(name: &'static str, value: f64, labels: Arc<Labels>) -> Self {
         Self {
-            name: name.into(),
+            name,
             labels,
             value,
             timestamp: SystemTime::now(),

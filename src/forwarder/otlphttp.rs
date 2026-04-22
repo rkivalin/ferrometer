@@ -285,9 +285,9 @@ impl Forwarder for OtlphttpForwarder {
 }
 
 fn metrics_to_otlp(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
-    let mut by_name: BTreeMap<&str, Vec<&Metric>> = BTreeMap::new();
+    let mut by_name: BTreeMap<&'static str, Vec<&Metric>> = BTreeMap::new();
     for m in metrics {
-        by_name.entry(&m.name).or_default().push(m);
+        by_name.entry(m.name).or_default().push(m);
     }
 
     let mut otlp_metrics = Vec::new();
@@ -313,7 +313,7 @@ fn metrics_to_otlp(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
         };
 
         otlp_metrics.push(OtlpMetric {
-            name: (*name).to_string(),
+            name: name.to_string(),
             data: Some(data),
             ..Default::default()
         });

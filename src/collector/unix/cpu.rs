@@ -1,9 +1,10 @@
 use procfs::CurrentSI;
 
+use crate::collector::unix::LabelCache;
 use crate::error::Result;
 use crate::signal::{Labels, Metric};
 
-pub fn collect() -> Result<Vec<Metric>> {
+pub fn collect(cache: &mut LabelCache) -> Result<Vec<Metric>> {
     let stats = procfs::KernelStats::current()
         .map_err(|e| crate::error::Error::Collector(format!("cpu: {e}")))?;
     let tps = procfs::ticks_per_second() as f64;
@@ -25,7 +26,11 @@ pub fn collect() -> Result<Vec<Metric>> {
             let mut labels = Labels::new();
             labels.insert("cpu".into(), cpu_label.clone());
             labels.insert("mode".into(), mode.into());
-            metrics.push(Metric::counter("node_cpu_seconds_total", value, labels));
+            metrics.push(Metric::counter(
+                "node_cpu_seconds_total",
+                value,
+                cache.intern(labels),
+            ));
         }
     }
 
