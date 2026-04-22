@@ -45,6 +45,19 @@ compression = "gzip"
 # HTTP request timeout (default: "30s")
 timeout = "30s"
 
-# Retry configuration for transient failures (5xx, network errors)
-retry-max = 3
-retry-interval = "5s"
+# Ring buffer cap for in-flight and not-yet-delivered metrics. When the buffer
+# overflows, the oldest batches are dropped. Default 100000 metrics — roughly
+# 20 MB of process memory worst case, covering a ~2 hour outage at typical
+# scrape rates.
+buffer-max-metrics = 100000
+
+# Upper bound on the number of metrics merged into a single OTLP request.
+# During recovery after an outage, the forwarder merges buffered batches up
+# to this cap, so catch-up takes a handful of large requests instead of one
+# per scrape tick. Default 10000.
+request-max-metrics = 10000
+
+# Exponential backoff for failed deliveries. Starts at `backoff-initial` and
+# doubles on each consecutive failure up to `backoff-max`. Resets on success.
+backoff-initial = "1s"
+backoff-max = "5m"

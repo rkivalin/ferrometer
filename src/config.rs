@@ -67,13 +67,20 @@ pub struct OtlphttpForwarderConfig {
         default = "default_timeout"
     )]
     pub timeout: Duration,
-    #[serde(default = "default_retry_max")]
-    pub retry_max: u32,
+    #[serde(default = "default_buffer_max_metrics")]
+    pub buffer_max_metrics: usize,
+    #[serde(default = "default_request_max_metrics")]
+    pub request_max_metrics: usize,
     #[serde(
         deserialize_with = "deserialize_duration",
-        default = "default_retry_interval"
+        default = "default_backoff_initial"
     )]
-    pub retry_interval: Duration,
+    pub backoff_initial: Duration,
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        default = "default_backoff_max"
+    )]
+    pub backoff_max: Duration,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -109,12 +116,20 @@ fn default_timeout() -> Duration {
     Duration::from_secs(30)
 }
 
-fn default_retry_max() -> u32 {
-    3
+fn default_buffer_max_metrics() -> usize {
+    100_000
 }
 
-fn default_retry_interval() -> Duration {
-    Duration::from_secs(5)
+fn default_request_max_metrics() -> usize {
+    10_000
+}
+
+fn default_backoff_initial() -> Duration {
+    Duration::from_secs(1)
+}
+
+fn default_backoff_max() -> Duration {
+    Duration::from_secs(300)
 }
 
 // Duration parsing
@@ -239,6 +254,21 @@ impl Config {
         if config.username.is_some() && config.password_file.is_none() {
             return Err(Error::Config(format!(
                 "forwarder {name}: password-file is required when username is set"
+            )));
+        }
+        if config.buffer_max_metrics == 0 {
+            return Err(Error::Config(format!(
+                "forwarder {name}: buffer-max-metrics must be greater than 0"
+            )));
+        }
+        if config.request_max_metrics == 0 {
+            return Err(Error::Config(format!(
+                "forwarder {name}: request-max-metrics must be greater than 0"
+            )));
+        }
+        if config.backoff_initial > config.backoff_max {
+            return Err(Error::Config(format!(
+                "forwarder {name}: backoff-initial must not exceed backoff-max"
             )));
         }
         Ok(())

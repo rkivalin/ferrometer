@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::signal;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::collector::Collector;
 use crate::config::{CollectorConfig, Config, ForwarderConfig};
@@ -27,10 +29,14 @@ pub async fn run(config: Config) -> Result<()> {
     }
     drop(tx);
 
-    // Build forwarders
-    let mut forwarders: Vec<Box<dyn Forwarder>> = Vec::new();
+    // Build forwarders and spawn their send loops
+    let mut forwarders: Vec<Arc<dyn Forwarder>> = Vec::new();
+    let mut forwarder_tasks: Vec<JoinHandle<Result<()>>> = Vec::new();
     for (name, forwarder_config) in &config.metrics.forwarders {
-        forwarders.push(build_forwarder(name, forwarder_config).await?);
+        let fwd = build_forwarder(name, forwarder_config).await?;
+        let run_fwd = fwd.clone();
+        forwarder_tasks.push(tokio::spawn(async move { run_fwd.run().await }));
+        forwarders.push(fwd);
     }
 
     tracing::info!(
@@ -39,7 +45,7 @@ pub async fn run(config: Config) -> Result<()> {
         "pipeline started"
     );
 
-    // Forward loop with graceful shutdown
+    // Fan-out loop with graceful shutdown
     let mut shutdown = std::pin::pin!(signal::ctrl_c());
     loop {
         tokio::select! {
@@ -47,26 +53,32 @@ pub async fn run(config: Config) -> Result<()> {
                 match batch {
                     Some(metrics) => {
                         for fwd in &forwarders {
-                            if let Err(e) = fwd.forward(&metrics).await {
-                                tracing::error!(forwarder = fwd.name(), error = %e, "forward failed");
-                            }
+                            fwd.submit(metrics.clone());
                         }
                     }
                     None => break,
                 }
             }
             _ = &mut shutdown => {
-                tracing::info!("received shutdown signal, flushing pending metrics");
+                tracing::info!("received shutdown signal, draining collectors");
                 rx.close();
                 while let Some(metrics) = rx.recv().await {
                     for fwd in &forwarders {
-                        if let Err(e) = fwd.forward(&metrics).await {
-                            tracing::error!(forwarder = fwd.name(), error = %e, "flush failed");
-                        }
+                        fwd.submit(metrics.clone());
                     }
                 }
                 break;
             }
+        }
+    }
+
+    // Signal forwarders to flush and exit, then await their tasks
+    for fwd in &forwarders {
+        fwd.shutdown();
+    }
+    for task in forwarder_tasks {
+        if let Err(e) = task.await {
+            tracing::error!(error = %e, "forwarder task panicked");
         }
     }
 
@@ -117,12 +129,12 @@ fn build_collector(
 async fn build_forwarder(
     name: &str,
     config: &ForwarderConfig,
-) -> Result<Box<dyn Forwarder>> {
+) -> Result<Arc<dyn Forwarder>> {
     match config {
         #[cfg(feature = "forwarder-otlphttp")]
-        ForwarderConfig::Otlphttp(c) => Ok(Box::new(
+        ForwarderConfig::Otlphttp(c) => Ok(
             crate::forwarder::otlphttp::OtlphttpForwarder::new(name, c).await?,
-        )),
+        ),
         #[cfg(not(feature = "forwarder-otlphttp"))]
         ForwarderConfig::Otlphttp(_) => Err(crate::error::Error::Config(format!(
             "forwarder {name}: otlphttp forwarder not compiled (enable feature 'forwarder-otlphttp')"
