@@ -31,7 +31,7 @@ const IGNORED_FS_TYPES: &[&str] = &[
     "overlay",
 ];
 
-pub fn collect(cache: &mut LabelCache) -> Result<Vec<Metric>> {
+pub async fn collect(cache: &mut LabelCache) -> Result<Vec<Metric>> {
     let mounts = procfs::mounts()
         .map_err(|e| crate::error::Error::Collector(format!("filesystem: {e}")))?;
     let mut metrics = Vec::new();
@@ -41,9 +41,13 @@ pub fn collect(cache: &mut LabelCache) -> Result<Vec<Metric>> {
             continue;
         }
 
-        let stat = match statvfs(mount.fs_file.as_str()) {
-            Ok(s) => s,
-            Err(_) => continue,
+        // statvfs can block for extended periods on stale network mounts
+        // (NFS, SSHFS, etc). Move it off the async runtime so a single hung
+        // mount can't freeze the collector or forwarder tasks.
+        let path = mount.fs_file.clone();
+        let stat = match tokio::task::spawn_blocking(move || statvfs(path.as_str())).await {
+            Ok(Ok(s)) => s,
+            _ => continue,
         };
 
         let frsize = stat.fragment_size() as f64;

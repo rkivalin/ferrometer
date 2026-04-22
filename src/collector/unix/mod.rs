@@ -80,7 +80,7 @@ impl Collector for UnixCollector {
                 "cpu" => cpu::collect(&mut self.cache)?,
                 "memory" => memory::collect(&mut self.cache)?,
                 "disk" => disk::collect(&mut self.cache, &self.disk_filter)?,
-                "filesystem" => filesystem::collect(&mut self.cache)?,
+                "filesystem" => filesystem::collect(&mut self.cache).await?,
                 "netdev" => netdev::collect(&mut self.cache, &self.net_filter)?,
                 "loadavg" => loadavg::collect(&mut self.cache)?,
                 "uname" => uname::collect(&mut self.cache)?,
