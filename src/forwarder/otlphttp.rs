@@ -363,18 +363,14 @@ fn build_slice_request(slice: &[Metric]) -> ExportMetricsServiceRequest {
         });
     }
 
-    let instance = slice
-        .first()
-        .and_then(|m| m.labels.get("instance"))
-        .cloned()
-        .unwrap_or_default();
-
+    // Emit a bare ResourceMetrics with no Resource attributes. The per-metric
+    // labels (including `instance`) flow through as datapoint attributes,
+    // which VictoriaMetrics ingests as labels directly — keeping the
+    // Prometheus-shaped `{instance="..."}` convention that dashboards and
+    // queries expect.
     ExportMetricsServiceRequest {
         resource_metrics: vec![ResourceMetrics {
-            resource: Some(Resource {
-                attributes: vec![kv("service.name", &instance)],
-                ..Default::default()
-            }),
+            resource: Some(Resource::default()),
             scope_metrics: vec![ScopeMetrics {
                 metrics: otlp_metrics,
                 ..Default::default()
@@ -395,11 +391,7 @@ fn kv(key: &str, value: &str) -> KeyValue {
 }
 
 fn labels_to_attributes(labels: &BTreeMap<String, String>) -> Vec<KeyValue> {
-    labels
-        .iter()
-        .filter(|(k, _)| k.as_str() != "instance")
-        .map(|(k, v)| kv(k, v))
-        .collect()
+    labels.iter().map(|(k, v)| kv(k, v)).collect()
 }
 
 fn system_time_to_nanos(t: SystemTime) -> u64 {
