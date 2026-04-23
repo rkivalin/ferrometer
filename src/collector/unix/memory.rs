@@ -1,6 +1,6 @@
 use procfs::Current;
 
-use crate::collector::unix::LabelCache;
+use crate::collector::label_cache::LabelCache;
 use crate::error::Result;
 use crate::signal::{Labels, Metric};
 

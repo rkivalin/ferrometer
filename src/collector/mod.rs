@@ -13,5 +13,11 @@ pub trait Collector: Send + Sync {
     fn name(&self) -> &str;
 }
 
+#[cfg(any(feature = "collector-unix", feature = "collector-prometheus"))]
+pub mod label_cache;
+
 #[cfg(feature = "collector-unix")]
 pub mod unix;
+
+#[cfg(feature = "collector-prometheus")]
+pub mod prometheus;

@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use crate::collector::unix::LabelCache;
+use crate::collector::label_cache::LabelCache;
 use crate::error::Result;
 use crate::signal::{Labels, Metric, MetricType};
 
@@ -62,13 +62,11 @@ pub fn collect(cache: &mut LabelCache, filter: &Regex) -> Result<Vec<Metric>> {
         let labels = cache.intern(labels);
 
         for (name, value, mtype) in pairs {
-            metrics.push(Metric {
-                name,
-                labels: labels.clone(),
-                value: *value,
-                timestamp: std::time::SystemTime::now(),
-                metric_type: mtype.clone(),
-            });
+            let metric = match mtype {
+                MetricType::Gauge => Metric::gauge(name, *value, labels.clone()),
+                MetricType::Counter => Metric::counter(name, *value, labels.clone()),
+            };
+            metrics.push(metric);
         }
     }
 

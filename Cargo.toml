@@ -12,8 +12,9 @@ strip = true
 panic = "abort"
 
 [features]
-default = ["collector-unix", "forwarder-otlphttp"]
+default = ["collector-unix", "collector-prometheus", "forwarder-otlphttp"]
 collector-unix = ["dep:procfs", "dep:regex", "dep:nix"]
+collector-prometheus = ["dep:reqwest", "dep:prometheus-parse"]
 forwarder-otlphttp = ["dep:prost", "dep:prost-types", "dep:reqwest", "dep:futures-util", "dep:bytes", "dep:tokio-util", "dep:async-compression"]
 log-source-journald-systemd = ["dep:systemd"]
 log-sink-loki = ["dep:reqwest", "dep:prost", "dep:prost-types", "dep:snap"]
@@ -42,6 +43,9 @@ async-trait = "0.1"
 procfs = { version = "0.17", optional = true }
 regex = { version = "1", optional = true }
 nix = { version = "0.29", features = ["fs", "feature"], optional = true }
+
+# Prometheus scraper collector
+prometheus-parse = { version = "0.2", optional = true }
 
 # OTLP HTTP forwarder
 prost = { version = "0.13", optional = true }

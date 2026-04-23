@@ -327,9 +327,11 @@ impl Forwarder for OtlphttpForwarder {
 }
 
 fn build_slice_request(slice: &[Metric]) -> ExportMetricsServiceRequest {
-    let mut by_name: BTreeMap<&'static str, Vec<&Metric>> = BTreeMap::new();
+    // Key by &str borrowed from the Arc<str>; the Arc stays alive through
+    // the &Metric references stored in each Vec.
+    let mut by_name: BTreeMap<&str, Vec<&Metric>> = BTreeMap::new();
     for m in slice {
-        by_name.entry(m.name).or_default().push(m);
+        by_name.entry(m.name.as_ref()).or_default().push(m);
     }
 
     let mut otlp_metrics = Vec::with_capacity(by_name.len());

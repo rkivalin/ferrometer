@@ -130,8 +130,38 @@ fn default_journald_metadata() -> std::collections::BTreeMap<String, String> {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
+#[allow(dead_code)] // Variants consumed only when the matching feature is compiled.
 pub enum CollectorConfig {
     Unix(UnixCollectorConfig),
+    Prometheus(PrometheusCollectorConfig),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)] // Fields read only with collector-prometheus feature.
+pub struct PrometheusCollectorConfig {
+    pub url: String,
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        default = "default_interval"
+    )]
+    pub interval: Duration,
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        default = "default_prometheus_scrape_timeout"
+    )]
+    pub scrape_timeout: Duration,
+    pub username: Option<String>,
+    pub password_file: Option<PathBuf>,
+    /// Static labels added to every scraped metric. `instance` is
+    /// auto-injected from [instance.name] and does not need to be listed
+    /// here (though an explicit entry here would win).
+    #[serde(default)]
+    pub static_labels: std::collections::BTreeMap<String, String>,
+}
+
+fn default_prometheus_scrape_timeout() -> Duration {
+    Duration::from_secs(10)
 }
 
 #[derive(Debug, Deserialize)]
@@ -297,6 +327,9 @@ impl Config {
                 CollectorConfig::Unix(unix) => {
                     self.validate_unix_collector(name, unix)?;
                 }
+                CollectorConfig::Prometheus(prom) => {
+                    self.validate_prometheus_collector(name, prom)?;
+                }
             }
         }
 
@@ -339,6 +372,24 @@ impl Config {
                     "collector {name}: unknown sub-collector '{c}'"
                 )));
             }
+        }
+        Ok(())
+    }
+
+    fn validate_prometheus_collector(
+        &self,
+        name: &str,
+        config: &PrometheusCollectorConfig,
+    ) -> Result<()> {
+        if config.url.is_empty() {
+            return Err(Error::Config(format!(
+                "collector {name}: url must not be empty"
+            )));
+        }
+        if config.username.is_some() && config.password_file.is_none() {
+            return Err(Error::Config(format!(
+                "collector {name}: password-file is required when username is set"
+            )));
         }
         Ok(())
     }

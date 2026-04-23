@@ -1,10 +1,8 @@
-use std::collections::HashSet;
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use regex::Regex;
 
 use crate::collector::Collector;
+use crate::collector::label_cache::LabelCache;
 use crate::config::UnixCollectorConfig;
 use crate::error::Result;
 use crate::signal::{Labels, Metric};
@@ -17,35 +15,6 @@ mod memory;
 mod netdev;
 mod uname;
 
-/// Intern cache for label sets. Sub-collectors build a raw `Labels` each tick;
-/// `intern` folds in the instance label, deduplicates against previously seen
-/// sets, and returns a shared `Arc<Labels>`. Since the label shape is stable
-/// across ticks for this collector, the cache grows once and is reused
-/// indefinitely.
-pub(crate) struct LabelCache {
-    instance: String,
-    cache: HashSet<Arc<Labels>>,
-}
-
-impl LabelCache {
-    fn new(instance: String) -> Self {
-        Self {
-            instance,
-            cache: HashSet::new(),
-        }
-    }
-
-    pub(crate) fn intern(&mut self, mut labels: Labels) -> Arc<Labels> {
-        labels.insert("instance".to_string(), self.instance.clone());
-        if let Some(arc) = self.cache.get(&labels) {
-            return arc.clone();
-        }
-        let arc = Arc::new(labels);
-        self.cache.insert(arc.clone());
-        arc
-    }
-}
-
 pub struct UnixCollector {
     #[allow(dead_code)]
     name: String,
@@ -57,6 +26,8 @@ pub struct UnixCollector {
 
 impl UnixCollector {
     pub fn new(name: &str, config: &UnixCollectorConfig, instance: &str) -> Result<Self> {
+        let mut base = Labels::new();
+        base.insert("instance".to_string(), instance.to_string());
         Ok(Self {
             name: name.to_string(),
             enabled: config.collectors.clone(),
@@ -66,7 +37,7 @@ impl UnixCollector {
             net_filter: Regex::new(&config.net_devices).map_err(|e| {
                 crate::error::Error::Config(format!("invalid net-devices regex: {e}"))
             })?,
-            cache: LabelCache::new(instance.to_string()),
+            cache: LabelCache::new(base),
         })
     }
 }

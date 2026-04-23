@@ -17,9 +17,10 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Spawn collector tasks
     for (name, collector_config) in &config.metrics.collectors {
-        let collector = build_collector(name, collector_config, &instance_name)?;
+        let collector = build_collector(name, collector_config, &instance_name).await?;
         let interval = match collector_config {
             CollectorConfig::Unix(c) => c.interval,
+            CollectorConfig::Prometheus(c) => c.interval,
         };
         let tx = tx.clone();
         let collector_name = name.clone();
@@ -109,7 +110,7 @@ async fn run_collector(
     }
 }
 
-fn build_collector(
+async fn build_collector(
     name: &str,
     config: &CollectorConfig,
     instance_name: &str,
@@ -122,6 +123,15 @@ fn build_collector(
         #[cfg(not(feature = "collector-unix"))]
         CollectorConfig::Unix(_) => Err(crate::error::Error::Config(format!(
             "collector {name}: unix collector not compiled (enable feature 'collector-unix')"
+        ))),
+        #[cfg(feature = "collector-prometheus")]
+        CollectorConfig::Prometheus(c) => Ok(Box::new(
+            crate::collector::prometheus::PrometheusScraper::new(name, c, instance_name)
+                .await?,
+        )),
+        #[cfg(not(feature = "collector-prometheus"))]
+        CollectorConfig::Prometheus(_) => Err(crate::error::Error::Config(format!(
+            "collector {name}: prometheus scraper not compiled (enable feature 'collector-prometheus')"
         ))),
     }
 }

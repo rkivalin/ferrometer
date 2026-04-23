@@ -26,6 +26,25 @@ net-devices = "^(eth|en|wl|bond)"
 # Available: cpu, memory, disk, filesystem, netdev, loadavg, uname
 collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
 
+# Prometheus scraper — pulls a text-exposition /metrics endpoint on an
+# interval. Counter, Gauge, and Untyped samples are forwarded; Histogram
+# and Summary are dropped with a debug log (ferrometer's internal metric
+# model is currently Gauge/Counter only). Scrape failures log a warning
+# and emit no metrics for that tick (no stale last-seen emission).
+# [metrics.collectors.haproxy]
+# type = "prometheus"
+# url = "http://127.0.0.1:9021/metrics"
+# interval = "15s"
+# scrape-timeout = "10s"
+# # Optional basic auth:
+# # username = "scraper"
+# # password-file = "/run/credentials/ferrometer/haproxy-password"
+#
+# # Static labels merged into every scraped metric. `instance` is
+# # auto-injected from [instance.name] and does not need listing here.
+# [metrics.collectors.haproxy.static-labels]
+# job = "haproxy"
+
 [metrics.forwarders.victoriametrics]
 type = "otlphttp"
 
