@@ -317,6 +317,7 @@ dependencies = [
  "base64",
  "bytes",
  "clap",
+ "flate2",
  "futures-util",
  "nix",
  "procfs",

@@ -3,6 +3,8 @@ use std::time::UNIX_EPOCH;
 
 use async_trait::async_trait;
 use base64::Engine;
+use flate2::Compression as GzCompression;
+use flate2::write::GzEncoder;
 use serde_json::json;
 
 use crate::config::LokiSinkConfig;
@@ -104,7 +106,9 @@ impl LokiSink {
             }).collect::<Vec<_>>()
         });
 
-        serde_json::to_vec(&json).expect("json serialization of Loki push body")
+        let mut encoder = GzEncoder::new(Vec::with_capacity(4 * 1024), GzCompression::default());
+        serde_json::to_writer(&mut encoder, &json).expect("json serialization of Loki push body");
+        encoder.finish().expect("gzip finalize")
     }
 }
 
@@ -155,6 +159,7 @@ impl Sink for LokiSink {
             .client
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
+            .header("Content-Encoding", "gzip")
             .body(body);
         if let Some(auth) = &self.auth_header {
             req = req.header("Authorization", auth);
