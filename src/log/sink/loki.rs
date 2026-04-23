@@ -153,10 +153,7 @@ impl LokiSink {
             .collect();
 
         let request = PushRequest { streams };
-        let mut proto_bytes = Vec::with_capacity(4 * 1024);
-        request
-            .encode(&mut proto_bytes)
-            .map_err(|e| Error::Sink(format!("protobuf encode: {e}")))?;
+        let proto_bytes = request.encode_to_vec();
 
         let compressed = snap::raw::Encoder::new()
             .compress_vec(&proto_bytes)
