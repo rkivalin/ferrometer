@@ -92,7 +92,8 @@ async fn spawn_logs(
         return Ok(None);
     };
 
-    let source = JournaldSource::new("journald")?;
+    // Hardcoded batch policy for the prototype. Moved to config later.
+    let source = JournaldSource::new("journald", 1000, std::time::Duration::from_secs(5))?;
     let sink = LokiSink::new("loki", &loki_config, &instance_name).await?;
     let shipper = Shipper::new(Box::new(source), Box::new(sink));
     Ok(Some(tokio::task::spawn_local(shipper.run())))

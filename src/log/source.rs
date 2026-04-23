@@ -39,11 +39,17 @@ pub struct Batch {
 /// inside a `LocalSet`.
 #[async_trait(?Send)]
 pub trait Source {
-    /// Return up to `max` entries starting at the current position. Subsequent
-    /// calls without an intervening `ack` return the same batch (so retries
-    /// after a failed send don't re-read the underlying source). Returns
-    /// `None` when no new entries are available.
-    async fn peek_batch(&mut self, max: usize) -> Result<Option<Arc<Batch>>>;
+    /// Block until a batch is ready for delivery and return it. Batch size
+    /// and debounce policy are the source's own concern, set at construction.
+    /// Subsequent calls without an intervening `ack` return the same batch
+    /// (possibly topped up with entries that accumulated during any backoff
+    /// between retries) so failed sends can be retried against the same
+    /// data without re-reading the underlying source from scratch.
+    ///
+    /// Returns `None` only in cases where the source is exhausted with no
+    /// more data forthcoming (not applicable to tailing sources like
+    /// journald). Cancellation is handled by the caller via tokio::select!.
+    async fn peek_batch(&mut self) -> Result<Option<Arc<Batch>>>;
 
     /// Advance the cursor past the given position and persist it so a
     /// subsequent process restart resumes from the same place.

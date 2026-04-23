@@ -7,20 +7,18 @@ use crate::error::Result;
 use crate::log::sink::Sink;
 use crate::log::source::Source;
 
-/// Drives one Source → Sink pair. Polls the source for batches, hands each
-/// to the sink, acks on success, backs off on failure. Cursor state lives in
-/// the source, so retries after a send failure re-deliver the same batch
-/// without re-reading the underlying log store.
+/// Drives one Source → Sink pair. The source internally decides when a
+/// batch is "ready" (size limit reached or debounce window elapsed since
+/// first entry) and blocks peek_batch until then. On successful delivery
+/// the shipper acks the cursor; on failure it waits out the exponential
+/// backoff, then retries the same (possibly topped-up) batch.
 ///
-/// No ring buffer: the source's underlying storage (e.g. journald) is the
-/// durable buffer. During a long sink outage this shipper idles with
-/// near-zero memory; when the sink comes back, it catches up by walking
-/// forward from the last-acked cursor.
+/// No ring buffer — the underlying log store (e.g. journald) is the
+/// durable buffer. During a sink outage memory stays flat; on recovery
+/// the shipper walks forward from the last acked cursor.
 pub struct Shipper {
     source: Box<dyn Source>,
     sink: Box<dyn Sink>,
-    batch_size: usize,
-    poll_interval: Duration,
     backoff_initial: Duration,
     backoff_max: Duration,
 }
@@ -30,8 +28,6 @@ impl Shipper {
         Self {
             source,
             sink,
-            batch_size: 1000,
-            poll_interval: Duration::from_secs(1),
             backoff_initial: Duration::from_secs(1),
             backoff_max: Duration::from_secs(300),
         }
@@ -59,28 +55,15 @@ impl Shipper {
                 }
             }
 
-            tracing::trace!("shipper: polling source");
             let batch = tokio::select! {
-                b = self.source.peek_batch(self.batch_size) => b?,
+                b = self.source.peek_batch() => b?,
                 _ = &mut shutdown => break,
             };
 
             let Some(batch) = batch else {
-                tracing::trace!(
-                    poll_ms = self.poll_interval.as_millis() as u64,
-                    "shipper: no entries, sleeping"
-                );
-                tokio::select! {
-                    _ = tokio::time::sleep(self.poll_interval) => continue,
-                    _ = &mut shutdown => break,
-                }
+                // Source reports it's exhausted; nothing more to do.
+                break;
             };
-
-            tracing::debug!(
-                entries = batch.entries.len(),
-                end_cursor = %batch.end_cursor,
-                "shipper: sending batch"
-            );
 
             let send_result = tokio::select! {
                 r = self.sink.send(&batch) => r,
@@ -89,7 +72,6 @@ impl Shipper {
 
             match send_result {
                 Ok(()) => {
-                    tracing::trace!("shipper: send ok, acking cursor");
                     self.source.ack(&batch.end_cursor).await?;
                     backoff = Duration::ZERO;
                     backoff_until = None;

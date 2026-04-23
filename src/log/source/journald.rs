@@ -1,9 +1,12 @@
+use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use systemd::journal::{Journal, JournalRecord, OpenOptions};
+use tokio::io::unix::AsyncFd;
+use tokio::time::Instant;
 
 use crate::error::{Error, Result};
 use crate::log::source::{Batch, Cursor, LogEntry, Source};
@@ -12,27 +15,41 @@ use crate::log::source::{Batch, Cursor, LogEntry, Source};
 /// later iterations.
 const CURSOR_FILE: &str = "./ferrometer-journal.cursor";
 
+/// Thin wrapper around a raw fd that implements AsRawFd but has no Drop,
+/// so tokio's AsyncFd does not close the fd when the Source is dropped —
+/// the fd is owned by the Journal and libsystemd closes it on Journal drop.
+struct JournalFdRef(RawFd);
+
+impl AsRawFd for JournalFdRef {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0
+    }
+}
+
 pub struct JournaldSource {
     name: String,
+    /// async_fd is declared before journal so it drops first. On Source drop
+    /// we want tokio to deregister the fd from the epoll set before libsystemd
+    /// closes the fd in Journal's Drop.
+    async_fd: AsyncFd<JournalFdRef>,
     journal: Journal,
     cursor_file: PathBuf,
     last_acked: Option<Cursor>,
-    cached: Option<Arc<Batch>>,
+    /// In-flight batch. Set when a batch is handed to the caller; cleared on
+    /// ack. On peek during retry, we try_unwrap this Arc (safe because the
+    /// caller drops its Arc clone between loop iterations), top up with any
+    /// entries that accumulated, and re-wrap.
+    in_flight: Option<Arc<Batch>>,
     /// Whether the journal has been positioned since the last ack. Before
-    /// the first peek, `false` — we must seek either to the saved cursor or
-    /// to tail. After each ack, reset to `false` so the next peek re-seeks
-    /// past the newly-acked cursor.
+    /// the first peek, `false` — we seek either to the saved cursor or to
+    /// tail.
     positioned: bool,
+    batch_size: usize,
+    batch_wait: Duration,
 }
 
 impl JournaldSource {
-    pub fn new(name: &str) -> Result<Self> {
-        // runtime_only(true) opens only the volatile journal under
-        // /run/log/journal, skipping the persistent archive under
-        // /var/log/journal. That dramatically shrinks the mmap surface
-        // (often 100s of MB → a few MB) at the cost of not seeing entries
-        // that pre-date ferrometer startup. For a tail-follow shipper this
-        // is the right trade-off; revisit if we ever need backfill.
+    pub fn new(name: &str, batch_size: usize, batch_wait: Duration) -> Result<Self> {
         let journal = OpenOptions::default()
             .system(true)
             .local_only(true)
@@ -40,16 +57,25 @@ impl JournaldSource {
             .open()
             .map_err(|e| Error::Source(format!("open journal: {e}")))?;
 
+        let fd = journal
+            .fd()
+            .map_err(|e| Error::Source(format!("journal fd: {e}")))?;
+        let async_fd = AsyncFd::new(JournalFdRef(fd))
+            .map_err(|e| Error::Source(format!("register journal fd: {e}")))?;
+
         let cursor_file = PathBuf::from(CURSOR_FILE);
         let last_acked = read_saved_cursor(&cursor_file)?;
 
         Ok(Self {
             name: name.to_string(),
+            async_fd,
             journal,
             cursor_file,
             last_acked,
-            cached: None,
+            in_flight: None,
             positioned: false,
+            batch_size,
+            batch_wait,
         })
     }
 
@@ -63,8 +89,6 @@ impl JournaldSource {
                         .seek_tail()
                         .map_err(|e| Error::Source(format!("seek_tail: {e}")))?;
                 } else {
-                    // seek_cursor positions AT the cursor entry; advance past it
-                    // so the next next_entry() returns the following entry.
                     let advanced = self
                         .journal
                         .next()
@@ -77,12 +101,6 @@ impl JournaldSource {
                 self.journal
                     .seek_tail()
                     .map_err(|e| Error::Source(format!("seek_tail: {e}")))?;
-                // seek_tail positions us past the last entry at seek time.
-                // From there, next() won't find newly-appended entries
-                // because the tail pointer doesn't auto-follow appends.
-                // Calling previous() moves to the last existing entry,
-                // establishing a concrete cursor from which subsequent
-                // next() calls can advance into new appends.
                 let moved = self
                     .journal
                     .previous()
@@ -94,21 +112,30 @@ impl JournaldSource {
         Ok(())
     }
 
-    fn read_entries(&mut self, max: usize) -> Result<Option<Batch>> {
-        // Journald mmaps journal files but its internal "tail" position is
-        // captured at seek time. New appends arrive via inotify and must be
-        // processed via wait() before next_entry() can see them. A zero
-        // timeout processes any pending notifications and returns
-        // immediately.
-        let wait_result = self
+    /// Wait for the journal to signal that new entries may be available,
+    /// then call process() to consume the notification so next_entry() can
+    /// see appended data.
+    async fn wait_for_journal_event(&mut self) -> Result<()> {
+        let mut guard = self
+            .async_fd
+            .readable()
+            .await
+            .map_err(|e| Error::Source(format!("async_fd readable: {e}")))?;
+        guard.clear_ready();
+        drop(guard);
+        let result = self
             .journal
-            .wait(Some(Duration::ZERO))
-            .map_err(|e| Error::Source(format!("wait: {e}")))?;
-        tracing::trace!(?wait_result, "journald: wait(0) result");
+            .process()
+            .map_err(|e| Error::Source(format!("process: {e}")))?;
+        tracing::trace!(?result, "journald: process() after wakeup");
+        Ok(())
+    }
 
-        let mut entries = Vec::new();
-        let mut last_cursor = None;
-        for _ in 0..max {
+    /// Read available entries into `batch` up to `batch_size`, advancing the
+    /// journal cursor. Does not block — returns as soon as next_entry()
+    /// returns None.
+    fn drain_available(&mut self, batch: &mut Batch) -> Result<()> {
+        while batch.entries.len() < self.batch_size {
             match self
                 .journal
                 .next_entry()
@@ -119,24 +146,62 @@ impl JournaldSource {
                         .journal
                         .cursor()
                         .map_err(|e| Error::Source(format!("cursor: {e}")))?;
-                    entries.push(record_to_entry(record));
-                    last_cursor = Some(cursor);
+                    batch.entries.push(record_to_entry(record));
+                    batch.end_cursor = cursor;
                 }
                 None => break,
             }
         }
-        tracing::trace!(
-            read = entries.len(),
-            max,
-            "journald: read_entries finished"
-        );
-        match last_cursor {
-            Some(c) => Ok(Some(Batch {
-                entries,
-                end_cursor: c,
-            })),
-            None => Ok(None),
+        Ok(())
+    }
+
+    /// Build a fresh batch: drain any entries already past the current
+    /// cursor, then — if nothing was there — block until the journal
+    /// signals new data. Once at least one entry is in hand, coalesce
+    /// more entries within `batch_wait` up to `batch_size`.
+    async fn build_batch(&mut self) -> Result<Batch> {
+        if !self.positioned {
+            self.position_to_start()?;
         }
+
+        let mut batch = Batch {
+            entries: Vec::new(),
+            end_cursor: String::new(),
+        };
+
+        // Immediate catch-up. On restart with a saved cursor there is
+        // typically a backlog of entries between the last acked cursor and
+        // the journal's current tail; reading them before awaiting fd
+        // events lets us drain the backlog right away instead of stalling
+        // for up to batch_wait (or forever, on a quiet system).
+        self.drain_available(&mut batch)?;
+
+        // Block until at least one entry is available if the catch-up
+        // found nothing.
+        while batch.entries.is_empty() {
+            self.wait_for_journal_event().await?;
+            self.drain_available(&mut batch)?;
+        }
+
+        // Coalesce more entries within the batch window.
+        let deadline = Instant::now() + self.batch_wait;
+        while batch.entries.len() < self.batch_size {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            let wakeup = tokio::select! {
+                r = self.wait_for_journal_event() => r,
+                _ = tokio::time::sleep(remaining) => break,
+            };
+            wakeup?;
+            self.drain_available(&mut batch)?;
+        }
+
+        tracing::trace!(
+            entries = batch.entries.len(),
+            "journald: built batch"
+        );
+        Ok(batch)
     }
 
     fn persist_cursor(&self, cursor: &str) -> Result<()> {
@@ -163,27 +228,53 @@ impl JournaldSource {
 
 #[async_trait(?Send)]
 impl Source for JournaldSource {
-    async fn peek_batch(&mut self, max: usize) -> Result<Option<Arc<Batch>>> {
-        if let Some(batch) = &self.cached {
-            return Ok(Some(batch.clone()));
+    async fn peek_batch(&mut self) -> Result<Option<Arc<Batch>>> {
+        // Retry path: previous send failed, caller asks again. Top up the
+        // in-flight batch with any entries that accumulated during backoff,
+        // non-blocking.
+        if let Some(arc) = self.in_flight.take() {
+            let (mut batch, from_clone) = match Arc::try_unwrap(arc) {
+                Ok(b) => (b, false),
+                Err(shared) => {
+                    // Caller still holds a reference — shouldn't happen in
+                    // practice because the shipper drops its Arc between
+                    // iterations, but fall back to returning the same Arc
+                    // without mutation.
+                    self.in_flight = Some(shared.clone());
+                    return Ok(Some(shared));
+                }
+            };
+            // Process any pending inotify events without blocking, then
+            // drain whatever's available.
+            if let Err(e) = self.journal.process() {
+                tracing::warn!(error = %e, "journald: process() during top-up failed");
+            }
+            let before = batch.entries.len();
+            self.drain_available(&mut batch)?;
+            if batch.entries.len() > before {
+                tracing::debug!(
+                    added = batch.entries.len() - before,
+                    total = batch.entries.len(),
+                    "journald: topped up in-flight batch"
+                );
+            }
+            let _ = from_clone;
+            let arc = Arc::new(batch);
+            self.in_flight = Some(arc.clone());
+            return Ok(Some(arc));
         }
 
-        if !self.positioned {
-            self.position_to_start()?;
-        }
-
-        let batch = self.read_entries(max)?;
-        let arc_batch = batch.map(Arc::new);
-        self.cached = arc_batch.clone();
-        Ok(arc_batch)
+        // Happy path: build a fresh batch.
+        let batch = self.build_batch().await?;
+        let arc = Arc::new(batch);
+        self.in_flight = Some(arc.clone());
+        Ok(Some(arc))
     }
 
     async fn ack(&mut self, cursor: &Cursor) -> Result<()> {
         self.persist_cursor(cursor)?;
         self.last_acked = Some(cursor.clone());
-        self.cached = None;
-        // Journal is positioned at the end of the batch already; no re-seek
-        // needed on the next peek.
+        self.in_flight = None;
         Ok(())
     }
 
@@ -223,4 +314,3 @@ fn record_to_entry(mut record: JournalRecord) -> LogEntry {
         fields: record,
     }
 }
-
