@@ -61,3 +61,16 @@ request-max-metrics = 10000
 # doubles on each consecutive failure up to `backoff-max`. Resets on success.
 backoff-initial = "1s"
 backoff-max = "5m"
+
+# ---------------------------------------------------------------------------
+# Logs (prototype). If [logs.loki] is present and ferrometer is built with
+# the log-source-journald-systemd + log-sink-loki features, the systemd
+# journal is tailed from the saved cursor (or tail on first run) and shipped
+# to Loki. No in-memory buffering — journald is the buffer. The cursor is
+# persisted to ./ferrometer-journal.cursor after every successful batch.
+# ---------------------------------------------------------------------------
+
+# [logs.loki]
+# endpoint = "http://loki.example.com:3100"
+# username = "write_myhost"
+# password-file = "/run/credentials/ferrometer/loki-password"

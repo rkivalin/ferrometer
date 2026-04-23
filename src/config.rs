@@ -11,6 +11,8 @@ pub struct Config {
     pub instance: InstanceConfig,
     #[serde(default)]
     pub metrics: MetricsConfig,
+    #[serde(default)]
+    pub logs: LogsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +26,23 @@ pub struct MetricsConfig {
     pub collectors: HashMap<String, CollectorConfig>,
     #[serde(default)]
     pub forwarders: HashMap<String, ForwarderConfig>,
+}
+
+// Logs: a single-shipper prototype. If [logs.loki] is absent, log shipping
+// is disabled; otherwise the hardcoded pipeline is journald → Loki.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LogsConfig {
+    pub loki: Option<LokiSinkConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)] // Fields are read only when log-sink-loki feature is enabled.
+pub struct LokiSinkConfig {
+    pub endpoint: String,
+    pub username: Option<String>,
+    pub password_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
