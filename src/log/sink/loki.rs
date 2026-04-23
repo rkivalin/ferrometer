@@ -3,18 +3,18 @@ use std::time::UNIX_EPOCH;
 
 use async_trait::async_trait;
 use base64::Engine;
-use flate2::Compression as GzCompression;
-use flate2::write::GzEncoder;
-use serde_json::json;
+use prost::Message as _;
 
 use crate::config::LokiSinkConfig;
 use crate::error::{Error, Result};
 use crate::log::sink::Sink;
 use crate::log::source::{Batch, LogEntry};
 
-/// Push sink for Grafana Loki. Uses the JSON flavor of the push API
-/// (application/json at /loki/api/v1/push). Entries are grouped into
-/// streams by a small fixed label vocabulary so cardinality stays bounded.
+/// Push sink for Grafana Loki using the native protobuf body + snappy
+/// block compression. Entries are grouped into streams by a small fixed
+/// label vocabulary so cardinality stays bounded; per-entry high-cardinality
+/// fields go into structured metadata so they're queryable without creating
+/// new streams.
 pub struct LokiSink {
     name: String,
     client: reqwest::Client,
@@ -22,6 +22,51 @@ pub struct LokiSink {
     auth_header: Option<String>,
     instance: String,
 }
+
+// --- Protobuf message definitions -------------------------------------------
+//
+// Hand-written Rust types mirroring grafana/loki/pkg/push/push.proto. Only
+// the fields ferrometer actually emits are declared here; the rest
+// (PushRequest.format, EntryAdapter.parsed) are omitted and will be
+// implicit-defaulted by any peer that does care about them.
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct PushRequest {
+    #[prost(message, repeated, tag = "1")]
+    streams: Vec<StreamAdapter>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct StreamAdapter {
+    /// Prometheus-format label set, e.g. `{job="ferrometer",unit="foo.service"}`.
+    #[prost(string, tag = "1")]
+    labels: String,
+    #[prost(message, repeated, tag = "2")]
+    entries: Vec<EntryAdapter>,
+    /// Deprecated field; Loki ignores it but it's part of the wire schema.
+    #[prost(uint64, tag = "3")]
+    hash: u64,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct EntryAdapter {
+    #[prost(message, optional, tag = "1")]
+    timestamp: Option<prost_types::Timestamp>,
+    #[prost(string, tag = "2")]
+    line: String,
+    #[prost(message, repeated, tag = "3")]
+    structured_metadata: Vec<LabelPairAdapter>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct LabelPairAdapter {
+    #[prost(string, tag = "1")]
+    name: String,
+    #[prost(string, tag = "2")]
+    value: String,
+}
+
+// ---------------------------------------------------------------------------
 
 impl LokiSink {
     pub async fn new(name: &str, config: &LokiSinkConfig, instance: &str) -> Result<Self> {
@@ -72,52 +117,58 @@ impl LokiSink {
         labels
     }
 
-    fn build_body(&self, batch: &Batch) -> Vec<u8> {
-        // Group entries by stream label set. Within each stream, emit
-        // three-tuples of [timestamp_ns, message, structured_metadata]
-        // which Loki 2.9+ understands. Structured metadata keeps
-        // high-cardinality fields (pid, hostname, boot_id, etc.) queryable
-        // without exploding stream count.
-        type Value = (String, String, BTreeMap<String, String>);
-        let mut streams: BTreeMap<BTreeMap<String, String>, Vec<Value>> = BTreeMap::new();
+    fn build_body(&self, batch: &Batch) -> Result<Vec<u8>> {
+        // Group entries by label set.
+        let mut by_stream: BTreeMap<BTreeMap<String, String>, Vec<EntryAdapter>> =
+            BTreeMap::new();
         for entry in &batch.entries {
             let labels = self.entry_labels(entry);
             let metadata = extract_metadata(&entry.fields);
-            let ts_ns = entry
+            let duration = entry
                 .timestamp
                 .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-                .to_string();
-            streams
-                .entry(labels)
-                .or_default()
-                .push((ts_ns, entry.message.clone(), metadata));
+                .unwrap_or_default();
+            let timestamp = prost_types::Timestamp {
+                seconds: duration.as_secs() as i64,
+                nanos: duration.subsec_nanos() as i32,
+            };
+            let structured_metadata: Vec<LabelPairAdapter> = metadata
+                .into_iter()
+                .map(|(name, value)| LabelPairAdapter { name, value })
+                .collect();
+            by_stream.entry(labels).or_default().push(EntryAdapter {
+                timestamp: Some(timestamp),
+                line: entry.message.clone(),
+                structured_metadata,
+            });
         }
 
-        let json = json!({
-            "streams": streams.into_iter().map(|(labels, values)| {
-                json!({
-                    "stream": labels,
-                    "values": values.into_iter()
-                        .map(|(ts, line, meta)| json!([ts, line, meta]))
-                        .collect::<Vec<_>>(),
-                })
-            }).collect::<Vec<_>>()
-        });
+        let streams: Vec<StreamAdapter> = by_stream
+            .into_iter()
+            .map(|(labels, entries)| StreamAdapter {
+                labels: format_label_string(&labels),
+                entries,
+                hash: 0,
+            })
+            .collect();
 
-        let mut encoder = GzEncoder::new(Vec::with_capacity(4 * 1024), GzCompression::default());
-        serde_json::to_writer(&mut encoder, &json).expect("json serialization of Loki push body");
-        encoder.finish().expect("gzip finalize")
+        let request = PushRequest { streams };
+        let mut proto_bytes = Vec::with_capacity(4 * 1024);
+        request
+            .encode(&mut proto_bytes)
+            .map_err(|e| Error::Sink(format!("protobuf encode: {e}")))?;
+
+        let compressed = snap::raw::Encoder::new()
+            .compress_vec(&proto_bytes)
+            .map_err(|e| Error::Sink(format!("snappy compress: {e}")))?;
+
+        Ok(compressed)
     }
 }
 
 /// Journald fields to forward as Loki structured metadata. Keys are
 /// normalized (strip leading underscore, lowercase). Everything NOT in this
-/// list (or in the label set) is dropped — most journald fields
-/// (_CAP_EFFECTIVE, _SELINUX_CONTEXT, _GID, _UID, _SYSTEMD_CGROUP, _EXE,
-/// _COMM, etc.) aren't useful for querying logs in Loki and just waste
-/// bytes.
+/// list (or in the label set) is dropped.
 const STRUCTURED_METADATA_FIELDS: &[(&str, &str)] = &[
     ("_PID", "pid"),
     ("SYSLOG_IDENTIFIER", "syslog_identifier"),
@@ -139,6 +190,31 @@ fn extract_metadata(fields: &BTreeMap<String, String>) -> BTreeMap<String, Strin
     meta
 }
 
+/// Format a label set as a Prometheus-style string: `{k1="v1",k2="v2"}`.
+/// Values are escaped per Prometheus rules (backslash, quote, newline).
+fn format_label_string(labels: &BTreeMap<String, String>) -> String {
+    let mut s = String::with_capacity(32 + labels.len() * 16);
+    s.push('{');
+    for (i, (k, v)) in labels.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(k);
+        s.push_str("=\"");
+        for c in v.chars() {
+            match c {
+                '\\' => s.push_str("\\\\"),
+                '"' => s.push_str("\\\""),
+                '\n' => s.push_str("\\n"),
+                _ => s.push(c),
+            }
+        }
+        s.push('"');
+    }
+    s.push('}');
+    s
+}
+
 #[async_trait]
 impl Sink for LokiSink {
     async fn send(&self, batch: &Batch) -> Result<()> {
@@ -146,7 +222,7 @@ impl Sink for LokiSink {
             return Ok(());
         }
 
-        let body = self.build_body(batch);
+        let body = self.build_body(batch)?;
         tracing::debug!(
             sink = self.name,
             endpoint = self.endpoint,
@@ -158,8 +234,8 @@ impl Sink for LokiSink {
         let mut req = self
             .client
             .post(&self.endpoint)
-            .header("Content-Type", "application/json")
-            .header("Content-Encoding", "gzip")
+            .header("Content-Type", "application/x-protobuf")
+            .header("Content-Encoding", "snappy")
             .body(body);
         if let Some(auth) = &self.auth_header {
             req = req.header("Authorization", auth);

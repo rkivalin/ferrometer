@@ -16,7 +16,7 @@ default = ["collector-unix", "forwarder-otlphttp"]
 collector-unix = ["dep:procfs", "dep:regex", "dep:nix"]
 forwarder-otlphttp = ["dep:prost", "dep:prost-types", "dep:reqwest", "dep:futures-util", "dep:bytes", "dep:tokio-util", "dep:async-compression"]
 log-source-journald-systemd = ["dep:systemd"]
-log-sink-loki = ["dep:reqwest", "dep:serde_json", "dep:flate2"]
+log-sink-loki = ["dep:reqwest", "dep:prost", "dep:prost-types", "dep:snap"]
 
 [dependencies]
 # CLI
@@ -56,8 +56,7 @@ async-compression = { version = "0.4", features = ["tokio", "gzip"], optional = 
 systemd = { version = "0.10", optional = true }
 
 # Log sink: Loki
-serde_json = { version = "1", optional = true }
-flate2 = { version = "1", optional = true }
+snap = { version = "1", optional = true }
 
 # Encoding (for basic auth)
 base64 = "0.22"
