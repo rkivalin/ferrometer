@@ -71,11 +71,16 @@ impl LokiSink {
     }
 
     fn build_body(&self, batch: &Batch) -> Vec<u8> {
-        // Group entries by label set.
-        let mut streams: BTreeMap<BTreeMap<String, String>, Vec<[String; 2]>> =
-            BTreeMap::new();
+        // Group entries by stream label set. Within each stream, emit
+        // three-tuples of [timestamp_ns, message, structured_metadata]
+        // which Loki 2.9+ understands. Structured metadata keeps
+        // high-cardinality fields (pid, hostname, boot_id, etc.) queryable
+        // without exploding stream count.
+        type Value = (String, String, BTreeMap<String, String>);
+        let mut streams: BTreeMap<BTreeMap<String, String>, Vec<Value>> = BTreeMap::new();
         for entry in &batch.entries {
             let labels = self.entry_labels(entry);
+            let metadata = extract_metadata(&entry.fields);
             let ts_ns = entry
                 .timestamp
                 .duration_since(UNIX_EPOCH)
@@ -85,17 +90,49 @@ impl LokiSink {
             streams
                 .entry(labels)
                 .or_default()
-                .push([ts_ns, entry.message.clone()]);
+                .push((ts_ns, entry.message.clone(), metadata));
         }
 
         let json = json!({
             "streams": streams.into_iter().map(|(labels, values)| {
-                json!({ "stream": labels, "values": values })
+                json!({
+                    "stream": labels,
+                    "values": values.into_iter()
+                        .map(|(ts, line, meta)| json!([ts, line, meta]))
+                        .collect::<Vec<_>>(),
+                })
             }).collect::<Vec<_>>()
         });
 
         serde_json::to_vec(&json).expect("json serialization of Loki push body")
     }
+}
+
+/// Journald fields to forward as Loki structured metadata. Keys are
+/// normalized (strip leading underscore, lowercase). Everything NOT in this
+/// list (or in the label set) is dropped — most journald fields
+/// (_CAP_EFFECTIVE, _SELINUX_CONTEXT, _GID, _UID, _SYSTEMD_CGROUP, _EXE,
+/// _COMM, etc.) aren't useful for querying logs in Loki and just waste
+/// bytes.
+const STRUCTURED_METADATA_FIELDS: &[(&str, &str)] = &[
+    ("_PID", "pid"),
+    ("SYSLOG_IDENTIFIER", "syslog_identifier"),
+    ("SYSLOG_FACILITY", "syslog_facility"),
+    ("_TRANSPORT", "transport"),
+    ("_HOSTNAME", "hostname"),
+    ("_BOOT_ID", "boot_id"),
+    ("_MACHINE_ID", "machine_id"),
+    ("_CMDLINE", "cmdline"),
+];
+
+fn extract_metadata(fields: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut meta = BTreeMap::new();
+    for (journal_key, loki_key) in STRUCTURED_METADATA_FIELDS {
+        if let Some(value) = fields.get(*journal_key) {
+            meta.insert((*loki_key).to_string(), value.clone());
+        }
+    }
+    meta
 }
 
 #[async_trait]
