@@ -42,6 +42,11 @@ pub struct OtlphttpForwarder {
     request_max_metrics: usize,
     backoff_initial: Duration,
     backoff_max: Duration,
+    /// OTLP Resource attributes attached to every ResourceMetrics message.
+    /// Pre-resolved at construction (any ${instance.name} references are
+    /// substituted once) and cloned into each send — proto KeyValue is
+    /// a straight protobuf message so cloning is cheap.
+    resource_attributes: Arc<Vec<KeyValue>>,
     state: Mutex<BufferState>,
     notify: Notify,
     shutdown: AtomicBool,
@@ -54,10 +59,15 @@ pub struct OtlphttpForwarder {
 struct EncoderState {
     popped: Arc<Vec<Vec<Metric>>>,
     batch_idx: usize,
+    resource_attributes: Arc<Vec<KeyValue>>,
 }
 
 impl OtlphttpForwarder {
-    pub async fn new(name: &str, config: &OtlphttpForwarderConfig) -> Result<Arc<Self>> {
+    pub async fn new(
+        name: &str,
+        config: &OtlphttpForwarderConfig,
+        instance_name: &str,
+    ) -> Result<Arc<Self>> {
         let password = match &config.password_file {
             Some(path) => {
                 let content = tokio::fs::read_to_string(path).await.map_err(|e| {
@@ -89,6 +99,17 @@ impl OtlphttpForwarder {
             .build()
             .map_err(|e| Error::Forwarder(format!("failed to create HTTP client: {e}")))?;
 
+        let resource_attributes: Arc<Vec<KeyValue>> = Arc::new(
+            config
+                .resource_attributes
+                .iter()
+                .map(|(k, v)| {
+                    let resolved = v.replace("${instance.name}", instance_name);
+                    kv(k, &resolved)
+                })
+                .collect(),
+        );
+
         Ok(Arc::new(Self {
             name: name.to_string(),
             client,
@@ -99,6 +120,7 @@ impl OtlphttpForwarder {
             request_max_metrics: config.request_max_metrics,
             backoff_initial: config.backoff_initial,
             backoff_max: config.backoff_max,
+            resource_attributes,
             state: Mutex::new(BufferState {
                 batches: VecDeque::new(),
                 total_metrics: 0,
@@ -168,6 +190,7 @@ impl OtlphttpForwarder {
             EncoderState {
                 popped: stream_popped,
                 batch_idx: 0,
+                resource_attributes: self.resource_attributes.clone(),
             },
             |mut state| async move {
                 if state.batch_idx >= state.popped.len() {
@@ -177,7 +200,7 @@ impl OtlphttpForwarder {
                 // mutating state's cursor.
                 let batches = state.popped.clone();
                 let batch = &batches[state.batch_idx];
-                let request = build_slice_request(batch);
+                let request = build_slice_request(batch, &state.resource_attributes);
                 let bytes = Bytes::from(request.encode_to_vec());
                 state.batch_idx += 1;
                 Some((Ok::<Bytes, std::io::Error>(bytes), state))
@@ -326,7 +349,10 @@ impl Forwarder for OtlphttpForwarder {
     }
 }
 
-fn build_slice_request(slice: &[Metric]) -> ExportMetricsServiceRequest {
+fn build_slice_request(
+    slice: &[Metric],
+    resource_attributes: &[KeyValue],
+) -> ExportMetricsServiceRequest {
     // Key by &str borrowed from the Arc<str>; the Arc stays alive through
     // the &Metric references stored in each Vec.
     let mut by_name: BTreeMap<&str, Vec<&Metric>> = BTreeMap::new();
@@ -363,14 +389,16 @@ fn build_slice_request(slice: &[Metric]) -> ExportMetricsServiceRequest {
         });
     }
 
-    // Emit a bare ResourceMetrics with no Resource attributes. The per-metric
-    // labels (including `instance`) flow through as datapoint attributes,
-    // which VictoriaMetrics ingests as labels directly — keeping the
-    // Prometheus-shaped `{instance="..."}` convention that dashboards and
-    // queries expect.
+    // Per-metric labels flow through as datapoint attributes. The Resource
+    // carries only what the user explicitly configured via
+    // resource-attributes (typically service.name / service.instance.id
+    // for OTel semantic-convention compatibility).
     ExportMetricsServiceRequest {
         resource_metrics: vec![ResourceMetrics {
-            resource: Some(Resource::default()),
+            resource: Some(Resource {
+                attributes: resource_attributes.to_vec(),
+                ..Default::default()
+            }),
             scope_metrics: vec![ScopeMetrics {
                 metrics: otlp_metrics,
                 ..Default::default()

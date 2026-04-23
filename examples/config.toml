@@ -81,6 +81,15 @@ request-max-metrics = 10000
 backoff-initial = "1s"
 backoff-max = "5m"
 
+# Attributes attached to the OTLP Resource message (separate from per-metric
+# labels). Useful for OTel semantic-convention compatibility with receivers
+# that distinguish Resource-level identifiers from per-metric dimensions.
+# Values may contain the placeholder ${instance.name} which is substituted
+# with the top-level [instance.name] at forwarder build time.
+# [metrics.forwarders.victoriametrics.resource-attributes]
+# "service.instance.id" = "${instance.name}"
+# "service.name" = "ferrometer"
+
 # ---------------------------------------------------------------------------
 # Logs. Each entry in [logs.shippers] pairs one source with one sink.
 # Requires ferrometer to be built with the matching features (for example

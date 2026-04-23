@@ -213,6 +213,12 @@ pub struct OtlphttpForwarderConfig {
         default = "default_backoff_max"
     )]
     pub backoff_max: Duration,
+    /// Resource attributes attached to the OTLP Resource message (as opposed
+    /// to per-datapoint attributes, which are the metric labels themselves).
+    /// Values may contain the placeholder `${instance.name}` which is
+    /// substituted with the `[instance].name` config at forwarder build time.
+    #[serde(default)]
+    pub resource_attributes: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
