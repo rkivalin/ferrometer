@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,12 +9,9 @@ use systemd::journal::{Journal, JournalRecord, OpenOptions};
 use tokio::io::unix::AsyncFd;
 use tokio::time::Instant;
 
+use crate::config::JournaldSourceConfig;
 use crate::error::{Error, Result};
 use crate::log::source::{Batch, Cursor, LogEntry, Source};
-
-/// Hardcoded cursor persistence path for the prototype. Moved to config in
-/// later iterations.
-const CURSOR_FILE: &str = "./ferrometer-journal.cursor";
 
 /// Thin wrapper around a raw fd that implements AsRawFd but has no Drop,
 /// so tokio's AsyncFd does not close the fd when the Source is dropped —
@@ -46,14 +44,25 @@ pub struct JournaldSource {
     positioned: bool,
     batch_size: usize,
     batch_wait: Duration,
+    /// Mapping journal_field → label_name. Applied per-entry.
+    labels_map: BTreeMap<String, String>,
+    /// Static labels merged into every LogEntry. Includes entries from config
+    /// static_labels plus any extras (e.g. instance) passed at construction.
+    static_labels: BTreeMap<String, String>,
+    /// Mapping journal_field → metadata_name. Applied per-entry.
+    metadata_map: BTreeMap<String, String>,
 }
 
 impl JournaldSource {
-    pub fn new(name: &str, batch_size: usize, batch_wait: Duration) -> Result<Self> {
+    pub fn new(
+        name: &str,
+        config: &JournaldSourceConfig,
+        extra_static_labels: BTreeMap<String, String>,
+    ) -> Result<Self> {
         let journal = OpenOptions::default()
             .system(true)
             .local_only(true)
-            .runtime_only(false)
+            .runtime_only(config.runtime_only)
             .open()
             .map_err(|e| Error::Source(format!("open journal: {e}")))?;
 
@@ -63,8 +72,16 @@ impl JournaldSource {
         let async_fd = AsyncFd::new(JournalFdRef(fd))
             .map_err(|e| Error::Source(format!("register journal fd: {e}")))?;
 
-        let cursor_file = PathBuf::from(CURSOR_FILE);
+        let cursor_file = config.cursor_file.clone();
         let last_acked = read_saved_cursor(&cursor_file)?;
+
+        // Merge config static_labels with any extras passed from main
+        // (typically {"instance": <config.instance.name>}). Extras win on
+        // conflict so the caller can always override.
+        let mut static_labels = config.static_labels.clone();
+        for (k, v) in extra_static_labels {
+            static_labels.insert(k, v);
+        }
 
         Ok(Self {
             name: name.to_string(),
@@ -74,8 +91,11 @@ impl JournaldSource {
             last_acked,
             in_flight: None,
             positioned: false,
-            batch_size,
-            batch_wait,
+            batch_size: config.batch_size,
+            batch_wait: config.batch_wait,
+            labels_map: config.labels.clone(),
+            static_labels,
+            metadata_map: config.metadata.clone(),
         })
     }
 
@@ -146,13 +166,46 @@ impl JournaldSource {
                         .journal
                         .cursor()
                         .map_err(|e| Error::Source(format!("cursor: {e}")))?;
-                    batch.entries.push(record_to_entry(record));
+                    batch.entries.push(self.record_to_entry(record));
                     batch.end_cursor = cursor;
                 }
                 None => break,
             }
         }
         Ok(())
+    }
+
+    fn record_to_entry(&self, mut record: JournalRecord) -> LogEntry {
+        let message = record.remove("MESSAGE").unwrap_or_default();
+        let timestamp = record
+            .get("__REALTIME_TIMESTAMP")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(|us| UNIX_EPOCH + Duration::from_micros(us))
+            .unwrap_or_else(SystemTime::now);
+
+        // Start with static labels, overlay dynamic mapping on top so
+        // config.labels wins over static_labels when both target the same
+        // key (unusual but well-defined).
+        let mut labels = self.static_labels.clone();
+        for (journal_key, label_name) in &self.labels_map {
+            if let Some(value) = record.get(journal_key) {
+                labels.insert(label_name.clone(), value.clone());
+            }
+        }
+
+        let mut metadata = BTreeMap::new();
+        for (journal_key, meta_name) in &self.metadata_map {
+            if let Some(value) = record.get(journal_key) {
+                metadata.insert(meta_name.clone(), value.clone());
+            }
+        }
+
+        LogEntry {
+            timestamp,
+            message,
+            labels,
+            metadata,
+        }
     }
 
     /// Build a fresh batch: drain any entries already past the current
@@ -301,16 +354,3 @@ fn read_saved_cursor(path: &PathBuf) -> Result<Option<Cursor>> {
     }
 }
 
-fn record_to_entry(mut record: JournalRecord) -> LogEntry {
-    let message = record.remove("MESSAGE").unwrap_or_default();
-    let timestamp = record
-        .get("__REALTIME_TIMESTAMP")
-        .and_then(|s| s.parse::<u64>().ok())
-        .map(|us| UNIX_EPOCH + Duration::from_micros(us))
-        .unwrap_or_else(SystemTime::now);
-    LogEntry {
-        timestamp,
-        message,
-        fields: record,
-    }
-}

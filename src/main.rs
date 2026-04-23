@@ -46,12 +46,12 @@ async fn main() -> anyhow::Result<()> {
                 .run_until(async move {
                     let metrics_handle = tokio::spawn(pipeline::run(config));
 
-                    let logs_handle = spawn_logs(logs_config, instance_name).await?;
+                    let logs_handles = spawn_logs(logs_config, instance_name).await?;
 
                     metrics_handle
                         .await
                         .map_err(|e| anyhow::anyhow!("metrics task: {e}"))??;
-                    if let Some(h) = logs_handle {
+                    for h in logs_handles {
                         h.await
                             .map_err(|e| anyhow::anyhow!("logs task: {e}"))??;
                     }
@@ -61,17 +61,11 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Validate => {
             let config = config::Config::load(&cli.config)?;
-            let loki = config
-                .logs
-                .loki
-                .as_ref()
-                .map(|_| 1)
-                .unwrap_or(0);
             println!(
                 "Configuration is valid. {} collector(s), {} forwarder(s), {} log shipper(s) configured.",
                 config.metrics.collectors.len(),
                 config.metrics.forwarders.len(),
-                loki,
+                config.logs.shippers.len(),
             );
         }
     }
@@ -83,32 +77,46 @@ async fn main() -> anyhow::Result<()> {
 async fn spawn_logs(
     logs_config: config::LogsConfig,
     instance_name: String,
-) -> anyhow::Result<Option<tokio::task::JoinHandle<error::Result<()>>>> {
+) -> anyhow::Result<Vec<tokio::task::JoinHandle<error::Result<()>>>> {
+    use std::collections::BTreeMap;
+
+    use config::{LogSinkConfig, LogSourceConfig};
     use log::shipper::Shipper;
     use log::sink::loki::LokiSink;
     use log::source::journald::JournaldSource;
+    use log::sink::Sink;
+    use log::source::Source;
 
-    let Some(loki_config) = logs_config.loki else {
-        return Ok(None);
-    };
+    let mut handles = Vec::new();
+    for (name, shipper_config) in logs_config.shippers {
+        let mut extra_static_labels = BTreeMap::new();
+        extra_static_labels.insert("instance".to_string(), instance_name.clone());
 
-    // Hardcoded batch policy for the prototype. Moved to config later.
-    let source = JournaldSource::new("journald", 1000, std::time::Duration::from_secs(5))?;
-    let sink = LokiSink::new("loki", &loki_config, &instance_name).await?;
-    let shipper = Shipper::new(Box::new(source), Box::new(sink));
-    Ok(Some(tokio::task::spawn_local(shipper.run())))
+        let source: Box<dyn Source> = match shipper_config.source {
+            LogSourceConfig::Journald(cfg) => {
+                Box::new(JournaldSource::new(&name, &cfg, extra_static_labels)?)
+            }
+        };
+        let sink: Box<dyn Sink> = match shipper_config.sink {
+            LogSinkConfig::Loki(cfg) => Box::new(LokiSink::new(&name, &cfg).await?),
+        };
+        let shipper = Shipper::new(source, sink);
+        handles.push(tokio::task::spawn_local(shipper.run()));
+    }
+    Ok(handles)
 }
 
 #[cfg(not(all(feature = "log-source-journald-systemd", feature = "log-sink-loki")))]
 async fn spawn_logs(
     logs_config: config::LogsConfig,
     _instance_name: String,
-) -> anyhow::Result<Option<tokio::task::JoinHandle<error::Result<()>>>> {
-    if logs_config.loki.is_some() {
+) -> anyhow::Result<Vec<tokio::task::JoinHandle<error::Result<()>>>> {
+    if !logs_config.shippers.is_empty() {
         tracing::warn!(
-            "[logs.loki] configured but log-source-journald-systemd + log-sink-loki features \
+            count = logs_config.shippers.len(),
+            "log shippers configured but log-source-journald-systemd + log-sink-loki features \
              are not compiled in; log shipping disabled"
         );
     }
-    Ok(None)
+    Ok(Vec::new())
 }

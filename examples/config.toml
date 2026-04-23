@@ -63,14 +63,48 @@ backoff-initial = "1s"
 backoff-max = "5m"
 
 # ---------------------------------------------------------------------------
-# Logs (prototype). If [logs.loki] is present and ferrometer is built with
-# the log-source-journald-systemd + log-sink-loki features, the systemd
-# journal is tailed from the saved cursor (or tail on first run) and shipped
-# to Loki. No in-memory buffering — journald is the buffer. The cursor is
-# persisted to ./ferrometer-journal.cursor after every successful batch.
+# Logs. Each entry in [logs.shippers] pairs one source with one sink.
+# Requires ferrometer to be built with the matching features (for example
+# log-source-journald-systemd + log-sink-loki for the configuration below).
+# The systemd journal is tailed from the saved cursor (or tail on first run)
+# and shipped to Loki. No in-memory ring buffer — journald is the durable
+# buffer; during a sink outage memory stays flat.
 # ---------------------------------------------------------------------------
 
-# [logs.loki]
+# [logs.shippers.journal]
+#
+# [logs.shippers.journal.source]
+# type = "journald"
+# # Optional tuning (shown with defaults):
+# batch-size = 1000
+# batch-wait = "5s"
+# cursor-file = "/var/lib/ferrometer/journal.cursor"
+# runtime-only = false       # true = only /run/log/journal (volatile)
+#
+# # source_field → loki_label_name (stream labels — low cardinality).
+# [logs.shippers.journal.source.labels]
+# "_SYSTEMD_UNIT" = "unit"
+# "PRIORITY" = "priority"
+#
+# # Static labels added to every entry. "instance" is auto-injected from
+# # [instance.name] and does not need to be listed here.
+# [logs.shippers.journal.source.static-labels]
+# job = "ferrometer"
+#
+# # source_field → structured metadata name (per-entry, queryable, does not
+# # create new streams).
+# [logs.shippers.journal.source.metadata]
+# "_PID" = "pid"
+# "SYSLOG_IDENTIFIER" = "syslog_identifier"
+# "SYSLOG_FACILITY" = "syslog_facility"
+# "_TRANSPORT" = "transport"
+# "_HOSTNAME" = "hostname"
+# "_BOOT_ID" = "boot_id"
+# "_MACHINE_ID" = "machine_id"
+# "_CMDLINE" = "cmdline"
+#
+# [logs.shippers.journal.sink]
+# type = "loki"
 # endpoint = "http://loki.example.com:3100"
 # username = "write_myhost"
 # password-file = "/run/credentials/ferrometer/loki-password"

@@ -8,27 +8,23 @@ use prost::Message as _;
 use crate::config::LokiSinkConfig;
 use crate::error::{Error, Result};
 use crate::log::sink::Sink;
-use crate::log::source::{Batch, LogEntry};
+use crate::log::source::Batch;
 
 /// Push sink for Grafana Loki using the native protobuf body + snappy
-/// block compression. Entries are grouped into streams by a small fixed
-/// label vocabulary so cardinality stays bounded; per-entry high-cardinality
-/// fields go into structured metadata so they're queryable without creating
-/// new streams.
+/// block compression. Source-agnostic: ships whatever labels and metadata
+/// the source populated on each LogEntry, with no knowledge of where those
+/// fields originated.
 pub struct LokiSink {
     name: String,
     client: reqwest::Client,
     endpoint: String,
     auth_header: Option<String>,
-    instance: String,
 }
 
 // --- Protobuf message definitions -------------------------------------------
 //
 // Hand-written Rust types mirroring grafana/loki/pkg/push/push.proto. Only
-// the fields ferrometer actually emits are declared here; the rest
-// (PushRequest.format, EntryAdapter.parsed) are omitted and will be
-// implicit-defaulted by any peer that does care about them.
+// the fields ferrometer actually emits are declared here.
 
 #[derive(Clone, PartialEq, prost::Message)]
 struct PushRequest {
@@ -69,7 +65,7 @@ struct LabelPairAdapter {
 // ---------------------------------------------------------------------------
 
 impl LokiSink {
-    pub async fn new(name: &str, config: &LokiSinkConfig, instance: &str) -> Result<Self> {
+    pub async fn new(name: &str, config: &LokiSinkConfig) -> Result<Self> {
         let password = match &config.password_file {
             Some(path) => {
                 let content = tokio::fs::read_to_string(path).await.map_err(|e| {
@@ -100,30 +96,14 @@ impl LokiSink {
             client,
             endpoint,
             auth_header,
-            instance: instance.to_string(),
         })
     }
 
-    fn entry_labels(&self, entry: &LogEntry) -> BTreeMap<String, String> {
-        let mut labels = BTreeMap::new();
-        labels.insert("job".to_string(), "ferrometer".to_string());
-        labels.insert("instance".to_string(), self.instance.clone());
-        if let Some(unit) = entry.fields.get("_SYSTEMD_UNIT") {
-            labels.insert("unit".to_string(), unit.clone());
-        }
-        if let Some(priority) = entry.fields.get("PRIORITY") {
-            labels.insert("priority".to_string(), priority.clone());
-        }
-        labels
-    }
-
     fn build_body(&self, batch: &Batch) -> Result<Vec<u8>> {
-        // Group entries by label set.
+        // Group entries by stream label set.
         let mut by_stream: BTreeMap<BTreeMap<String, String>, Vec<EntryAdapter>> =
             BTreeMap::new();
         for entry in &batch.entries {
-            let labels = self.entry_labels(entry);
-            let metadata = extract_metadata(&entry.fields);
             let duration = entry
                 .timestamp
                 .duration_since(UNIX_EPOCH)
@@ -132,15 +112,22 @@ impl LokiSink {
                 seconds: duration.as_secs() as i64,
                 nanos: duration.subsec_nanos() as i32,
             };
-            let structured_metadata: Vec<LabelPairAdapter> = metadata
-                .into_iter()
-                .map(|(name, value)| LabelPairAdapter { name, value })
+            let structured_metadata: Vec<LabelPairAdapter> = entry
+                .metadata
+                .iter()
+                .map(|(name, value)| LabelPairAdapter {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
                 .collect();
-            by_stream.entry(labels).or_default().push(EntryAdapter {
-                timestamp: Some(timestamp),
-                line: entry.message.clone(),
-                structured_metadata,
-            });
+            by_stream
+                .entry(entry.labels.clone())
+                .or_default()
+                .push(EntryAdapter {
+                    timestamp: Some(timestamp),
+                    line: entry.message.clone(),
+                    structured_metadata,
+                });
         }
 
         let streams: Vec<StreamAdapter> = by_stream
@@ -161,30 +148,6 @@ impl LokiSink {
 
         Ok(compressed)
     }
-}
-
-/// Journald fields to forward as Loki structured metadata. Keys are
-/// normalized (strip leading underscore, lowercase). Everything NOT in this
-/// list (or in the label set) is dropped.
-const STRUCTURED_METADATA_FIELDS: &[(&str, &str)] = &[
-    ("_PID", "pid"),
-    ("SYSLOG_IDENTIFIER", "syslog_identifier"),
-    ("SYSLOG_FACILITY", "syslog_facility"),
-    ("_TRANSPORT", "transport"),
-    ("_HOSTNAME", "hostname"),
-    ("_BOOT_ID", "boot_id"),
-    ("_MACHINE_ID", "machine_id"),
-    ("_CMDLINE", "cmdline"),
-];
-
-fn extract_metadata(fields: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    let mut meta = BTreeMap::new();
-    for (journal_key, loki_key) in STRUCTURED_METADATA_FIELDS {
-        if let Some(value) = fields.get(*journal_key) {
-            meta.insert((*loki_key).to_string(), value.clone());
-        }
-    }
-    meta
 }
 
 /// Format a label set as a Prometheus-style string: `{k1="v1",k2="v2"}`.

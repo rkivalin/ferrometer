@@ -28,12 +28,60 @@ pub struct MetricsConfig {
     pub forwarders: HashMap<String, ForwarderConfig>,
 }
 
-// Logs: a single-shipper prototype. If [logs.loki] is absent, log shipping
-// is disabled; otherwise the hardcoded pipeline is journald → Loki.
+// Logs: shippers map, each entry pairs one source with one sink.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct LogsConfig {
-    pub loki: Option<LokiSinkConfig>,
+    #[serde(default)]
+    pub shippers: HashMap<String, ShipperConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // Fields consumed only when log features are compiled.
+pub struct ShipperConfig {
+    pub source: LogSourceConfig,
+    pub sink: LogSinkConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+#[allow(dead_code)] // Inner payloads consumed only when the matching feature is compiled.
+pub enum LogSourceConfig {
+    Journald(JournaldSourceConfig),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)] // Fields are read only with log-source-journald-systemd feature.
+pub struct JournaldSourceConfig {
+    #[serde(default = "default_journald_batch_size")]
+    pub batch_size: usize,
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        default = "default_journald_batch_wait"
+    )]
+    pub batch_wait: Duration,
+    #[serde(default = "default_journald_cursor_file")]
+    pub cursor_file: PathBuf,
+    #[serde(default)]
+    pub runtime_only: bool,
+    /// Source-field → label-name. Dropped on entry read if the source field
+    /// is absent. Produces stream labels (low cardinality).
+    #[serde(default = "default_journald_labels")]
+    pub labels: std::collections::BTreeMap<String, String>,
+    /// Static labels added to every entry regardless of source fields.
+    #[serde(default)]
+    pub static_labels: std::collections::BTreeMap<String, String>,
+    /// Source-field → metadata-name. Per-entry, not stream-generating.
+    #[serde(default = "default_journald_metadata")]
+    pub metadata: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+#[allow(dead_code)] // Inner payloads consumed only when the matching feature is compiled.
+pub enum LogSinkConfig {
+    Loki(LokiSinkConfig),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,6 +91,41 @@ pub struct LokiSinkConfig {
     pub endpoint: String,
     pub username: Option<String>,
     pub password_file: Option<PathBuf>,
+}
+
+fn default_journald_batch_size() -> usize {
+    1000
+}
+
+fn default_journald_batch_wait() -> Duration {
+    Duration::from_secs(5)
+}
+
+fn default_journald_cursor_file() -> PathBuf {
+    PathBuf::from("/var/lib/ferrometer/journal.cursor")
+}
+
+fn default_journald_labels() -> std::collections::BTreeMap<String, String> {
+    [("_SYSTEMD_UNIT", "unit"), ("PRIORITY", "priority")]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+fn default_journald_metadata() -> std::collections::BTreeMap<String, String> {
+    [
+        ("_PID", "pid"),
+        ("SYSLOG_IDENTIFIER", "syslog_identifier"),
+        ("SYSLOG_FACILITY", "syslog_facility"),
+        ("_TRANSPORT", "transport"),
+        ("_HOSTNAME", "hostname"),
+        ("_BOOT_ID", "boot_id"),
+        ("_MACHINE_ID", "machine_id"),
+        ("_CMDLINE", "cmdline"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
 }
 
 #[derive(Debug, Deserialize)]

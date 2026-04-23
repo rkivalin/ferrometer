@@ -10,14 +10,21 @@ use crate::error::Result;
 /// journal cursor string; other sources may use offsets or timestamps.
 pub type Cursor = String;
 
-/// A single log record returned by a source. Timestamp is the record's
-/// wall-clock time; fields are any structured key/value pairs carried with the
-/// record (e.g. journald's _SYSTEMD_UNIT, PRIORITY, etc.).
+/// A single log record returned by a source. The source is responsible for
+/// projecting its native fields into `labels` (low-cardinality, grouped into
+/// streams by sinks that have a stream concept) and `metadata` (per-entry,
+/// queryable but not stream-generating).
+///
+/// This split mirrors the universal log shipping abstraction: Loki calls it
+/// "labels vs structured metadata"; OTLP calls it "Resource attributes vs
+/// LogRecord attributes". Sinks are source-agnostic — they just ship what's
+/// in these two maps.
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub timestamp: SystemTime,
     pub message: String,
-    pub fields: BTreeMap<String, String>,
+    pub labels: BTreeMap<String, String>,
+    pub metadata: BTreeMap<String, String>,
 }
 
 /// A batch of log entries plus the cursor of the last entry. The cursor is
