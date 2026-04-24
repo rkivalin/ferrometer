@@ -17,6 +17,7 @@ pub fn collect(cache: &mut LabelCache) -> Result<Vec<Metric>> {
         ("node_memory_Cached_bytes", Some(info.cached)),
         ("node_memory_SwapTotal_bytes", Some(info.swap_total)),
         ("node_memory_SwapFree_bytes", Some(info.swap_free)),
+        ("node_memory_SwapCached_bytes", Some(info.swap_cached)),
         ("node_memory_Shmem_bytes", info.shmem),
         ("node_memory_SReclaimable_bytes", info.s_reclaimable),
         ("node_memory_SUnreclaim_bytes", info.s_unreclaim),
@@ -25,7 +26,9 @@ pub fn collect(cache: &mut LabelCache) -> Result<Vec<Metric>> {
     let labels = cache.intern(Labels::new());
     for &(name, value) in fields {
         if let Some(v) = value {
-            metrics.push(Metric::gauge(name, (v * 1024) as f64, labels.clone()));
+            // procfs::Meminfo already reports bytes — it converts the kB
+            // suffixes in /proc/meminfo at parse time. Do not re-multiply.
+            metrics.push(Metric::gauge(name, v as f64, labels.clone()));
         }
     }
 
