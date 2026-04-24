@@ -146,11 +146,21 @@ pub struct PrometheusCollectorConfig {
         default = "default_interval"
     )]
     pub interval: Duration,
+    /// HTTP request timeout used by the scraper's reqwest client. The
+    /// scheduler's hard deadline (`max_runtime`) should be >= this.
     #[serde(
         deserialize_with = "deserialize_duration",
         default = "default_prometheus_scrape_timeout"
     )]
     pub scrape_timeout: Duration,
+    /// Scheduler-level hard deadline. Defaults generously above
+    /// `scrape_timeout` to leave room for connection setup, body read,
+    /// and parsing.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        default = "default_prometheus_max_runtime"
+    )]
+    pub max_runtime: Duration,
     pub username: Option<String>,
     pub password_file: Option<PathBuf>,
     /// Static labels added to every scraped metric. `instance` is
@@ -164,6 +174,10 @@ fn default_prometheus_scrape_timeout() -> Duration {
     Duration::from_secs(10)
 }
 
+fn default_prometheus_max_runtime() -> Duration {
+    Duration::from_secs(15)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnixCollectorConfig {
@@ -172,12 +186,24 @@ pub struct UnixCollectorConfig {
         default = "default_interval"
     )]
     pub interval: Duration,
+    /// Hard deadline: if the collect call exceeds this, the scheduler aborts
+    /// the task. `/proc` reads are effectively instant; the default leaves
+    /// generous headroom for statvfs on stale network mounts.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        default = "default_unix_max_runtime"
+    )]
+    pub max_runtime: Duration,
     #[serde(default = "default_disk_devices")]
     pub disk_devices: String,
     #[serde(default = "default_net_devices")]
     pub net_devices: String,
     #[serde(default = "default_unix_collectors")]
     pub collectors: Vec<String>,
+}
+
+fn default_unix_max_runtime() -> Duration {
+    Duration::from_secs(5)
 }
 
 #[derive(Debug, Deserialize)]
