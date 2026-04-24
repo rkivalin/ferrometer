@@ -54,8 +54,8 @@ nix = { version = "0.31", features = ["fs", "feature"], optional = true }
 prometheus-parse = { version = "0.2", optional = true }
 
 # OTLP HTTP forwarder
-prost = { version = "0.13", optional = true }
-prost-types = { version = "0.13", optional = true }
+prost = { version = "0.14", optional = true }
+prost-types = { version = "0.14", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"], optional = true }
 futures-util = { version = "0.3", optional = true }
 bytes = { version = "1", optional = true }
@@ -72,4 +72,4 @@ snap = { version = "1", optional = true }
 base64 = "0.22"
 
 [build-dependencies]
-prost-build = "0.13"
+prost-build = "0.14"
