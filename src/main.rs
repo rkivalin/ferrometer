@@ -18,6 +18,18 @@ use cli::{Cli, Command};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    // Install ring as the default rustls crypto provider. We link rustls
+    // with `ring` (all-Rust, no C toolchain) and `rustls-no-provider` at the
+    // reqwest layer, so reqwest's ClientBuilder would otherwise fail at
+    // runtime with "no process-level CryptoProvider available". Safe to call
+    // multiple times; only the first wins.
+    #[cfg(any(
+        feature = "forwarder-otlphttp",
+        feature = "collector-prometheus",
+        feature = "log-sink-loki"
+    ))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cli = Cli::parse();
 
     let filter = match cli.verbose {
