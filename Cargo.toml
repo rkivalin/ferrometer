@@ -12,7 +12,13 @@ strip = true
 panic = "abort"
 
 [features]
-default = ["collector-unix", "collector-prometheus", "forwarder-otlphttp"]
+default = [
+    "collector-unix",
+    "collector-prometheus",
+    "forwarder-otlphttp",
+    "log-source-journald-systemd",
+    "log-sink-loki",
+]
 collector-unix = ["dep:procfs", "dep:regex", "dep:nix"]
 collector-prometheus = ["dep:reqwest", "dep:prometheus-parse"]
 forwarder-otlphttp = ["dep:prost", "dep:prost-types", "dep:reqwest", "dep:futures-util", "dep:bytes", "dep:tokio-util", "dep:async-compression"]

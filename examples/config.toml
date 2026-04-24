@@ -1,6 +1,15 @@
 # Ferrometer configuration
 #
 # All durations use suffix notation: "15s", "5m", "1h"
+#
+# String values may contain placeholders, resolved at config load time:
+#   ${instance.name}    — [instance].name from this file
+#   ${version}          — ferrometer's own version
+#   ${env:VAR}          — environment variable (unset → hard error)
+#
+# Under the shipped systemd unit, systemd sets STATE_DIRECTORY and (when
+# LoadCredentialEncrypted= is configured) CREDENTIALS_DIRECTORY, which is
+# why the examples below reference them.
 
 [instance]
 # Unique name for this host. Added as "instance" label to all metrics.
@@ -15,6 +24,11 @@ type = "unix"
 # Collection interval (default: "15s")
 interval = "15s"
 
+# Hard deadline for a single collect() call. The scheduler aborts the task
+# if it exceeds this; /proc reads are effectively instant, so the default
+# leaves headroom for statvfs on stale network mounts. (default: "5s")
+max-runtime = "5s"
+
 # Regex filter for disk devices to monitor (default: common block devices)
 # Only devices matching this pattern will be reported.
 disk-devices = "^(nvme\\d+n\\d+|sd[a-z]+|vd[a-z]+)$"
@@ -26,6 +40,12 @@ net-devices = "^(eth|en|wl|bond)"
 # Available: cpu, memory, disk, filesystem, netdev, loadavg, uname
 collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
 
+# Static labels added to every emitted metric. Nothing is auto-injected;
+# to carry an `instance`-like identifier prefer the forwarder's
+# resource-attributes (OTel semantic convention).
+# [metrics.collectors.system.static-labels]
+# role = "edge"
+
 # Prometheus scraper — pulls a text-exposition /metrics endpoint on an
 # interval. Counter, Gauge, and Untyped samples are forwarded; Histogram
 # and Summary are dropped with a debug log (ferrometer's internal metric
@@ -35,58 +55,44 @@ collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname
 # type = "prometheus"
 # url = "http://127.0.0.1:9021/metrics"
 # interval = "15s"
-# scrape-timeout = "10s"
+# scrape-timeout = "10s"         # HTTP request timeout (default: "10s")
+# max-runtime = "15s"            # Scheduler hard deadline; must be >= scrape-timeout (default: "15s")
 # # Optional basic auth:
 # # username = "scraper"
-# # password-file = "/run/credentials/ferrometer/haproxy-password"
+# # password-file = "${env:CREDENTIALS_DIRECTORY}/haproxy-password"
 #
 # # Static labels merged into every scraped metric. `instance` is
 # # auto-injected from [instance.name] and does not need listing here.
 # [metrics.collectors.haproxy.static-labels]
 # job = "haproxy"
 
-[metrics.forwarders.victoriametrics]
-type = "otlphttp"
-
-# OTLP HTTP endpoint. "/v1/metrics" is appended automatically if not present.
-endpoint = "http://metrics.example.com:8428/opentelemetry"
-
-# Basic auth credentials (optional)
-username = "write_myhost"
-
-# Path to file containing the password (one line, trimmed).
-# Supports systemd encrypted credentials via LoadCredentialEncrypted.
-password-file = "/run/credentials/ferrometer/otlp-password"
-
-# Compression: "gzip" (default) or "none"
-compression = "gzip"
-
-# HTTP request timeout (default: "30s")
-timeout = "30s"
-
-# Ring buffer cap for in-flight and not-yet-delivered metrics. When the buffer
-# overflows, the oldest batches are dropped. Default 100000 metrics — roughly
-# 20 MB of process memory worst case, covering a ~2 hour outage at typical
-# scrape rates.
-buffer-max-metrics = 100000
-
-# Upper bound on the number of metrics merged into a single OTLP request.
-# During recovery after an outage, the forwarder merges buffered batches up
-# to this cap, so catch-up takes a handful of large requests instead of one
-# per scrape tick. Default 10000.
-request-max-metrics = 10000
-
-# Exponential backoff for failed deliveries. Starts at `backoff-initial` and
-# doubles on each consecutive failure up to `backoff-max`. Resets on success.
-backoff-initial = "1s"
-backoff-max = "5m"
-
-# Attributes attached to the OTLP Resource message (separate from per-metric
-# labels). Useful for OTel semantic-convention compatibility with receivers
-# that distinguish Resource-level identifiers from per-metric dimensions.
-# Supported placeholders in values:
-#   ${instance.name}  →  the top-level [instance].name
-#   ${version}        →  ferrometer's own version (e.g. "0.1.0")
+# OTLP HTTP forwarder — pushes metrics to any OTLP/HTTP backend
+# (VictoriaMetrics, Grafana Mimir, etc.). "/v1/metrics" is appended to the
+# endpoint automatically if not present.
+# [metrics.forwarders.victoriametrics]
+# type = "otlphttp"
+# endpoint = "http://metrics.example.com:8428/opentelemetry"
+#
+# # Basic auth (optional). See README.md for wiring up the password via
+# # systemd encrypted credentials (LoadCredentialEncrypted=).
+# username = "ferrometer"
+# password-file = "${env:CREDENTIALS_DIRECTORY}/otlp-password"
+#
+# # Optional tuning (shown with defaults):
+# compression = "gzip"            # "gzip" or "none"
+# timeout = "30s"                 # HTTP request timeout
+# buffer-max-metrics = 100000     # ring buffer cap; oldest batches drop on overflow.
+#                                 # ~20 MB worst case, covers a ~2 hour outage at typical rates.
+# request-max-metrics = 10000     # upper bound on metrics merged into a single OTLP request
+# backoff-initial = "1s"          # exponential backoff for failed deliveries;
+# backoff-max = "5m"              # doubles per consecutive failure up to backoff-max.
+#
+# # Attributes attached to the OTLP Resource message (separate from per-metric
+# # labels). Useful for OTel semantic-convention compatibility with receivers
+# # that distinguish Resource-level identifiers from per-metric dimensions.
+# # Supported placeholders in values:
+# #   ${instance.name}  →  the top-level [instance].name
+# #   ${version}        →  ferrometer's own version (e.g. "0.1.0")
 # [metrics.forwarders.victoriametrics.resource-attributes]
 # "service.instance.id" = "${instance.name}"
 # "service.name" = "ferrometer"
@@ -94,8 +100,8 @@ backoff-max = "5m"
 
 # ---------------------------------------------------------------------------
 # Logs. Each entry in [logs.shippers] pairs one source with one sink.
-# Requires ferrometer to be built with the matching features (for example
-# log-source-journald-systemd + log-sink-loki for the configuration below).
+# Journald source + Loki sink are compiled in by default; other source/sink
+# combinations require their matching feature flag (see README.md).
 # The systemd journal is tailed from the saved cursor (or tail on first run)
 # and shipped to Loki. No in-memory ring buffer — journald is the durable
 # buffer; during a sink outage memory stays flat.
@@ -108,7 +114,7 @@ backoff-max = "5m"
 # # Optional tuning (shown with defaults):
 # batch-size = 1000
 # batch-wait = "5s"
-# cursor-file = "/var/lib/ferrometer/journal.cursor"
+# cursor-file = "${env:STATE_DIRECTORY}/journal.cursor"
 # runtime-only = false       # true = only /run/log/journal (volatile)
 #
 # # source_field → loki_label_name (stream labels — low cardinality).
@@ -136,5 +142,5 @@ backoff-max = "5m"
 # [logs.shippers.journal.sink]
 # type = "loki"
 # endpoint = "http://loki.example.com:3100"
-# username = "write_myhost"
-# password-file = "/run/credentials/ferrometer/loki-password"
+# username = "ferrometer"
+# password-file = "${env:CREDENTIALS_DIRECTORY}/loki-password"

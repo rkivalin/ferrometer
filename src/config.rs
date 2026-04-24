@@ -102,7 +102,10 @@ fn default_journald_batch_wait() -> Duration {
 }
 
 fn default_journald_cursor_file() -> PathBuf {
-    PathBuf::from("/var/lib/ferrometer/journal.cursor")
+    // Resolved at load time via expand_placeholders. Under the shipped
+    // systemd unit, StateDirectory=ferrometer causes systemd to set
+    // STATE_DIRECTORY=/var/lib/ferrometer for the service.
+    PathBuf::from("${env:STATE_DIRECTORY}/journal.cursor")
 }
 
 fn default_journald_labels() -> std::collections::BTreeMap<String, String> {
@@ -246,8 +249,8 @@ pub struct OtlphttpForwarderConfig {
     pub backoff_max: Duration,
     /// Resource attributes attached to the OTLP Resource message (as opposed
     /// to per-datapoint attributes, which are the metric labels themselves).
-    /// Values may contain the placeholder `${instance.name}` which is
-    /// substituted with the `[instance].name` config at forwarder build time.
+    /// Values may contain placeholders (`${instance.name}`, `${version}`,
+    /// `${env:VAR}`) resolved at config load time.
     #[serde(default)]
     pub resource_attributes: std::collections::BTreeMap<String, String>,
 }
@@ -334,7 +337,18 @@ fn parse_duration(s: &str) -> std::result::Result<Duration, String> {
 // Config loading and validation
 
 impl Config {
+    /// Load + shape-validate + resolve placeholders. Used by `run`.
     pub fn load(path: &Path) -> Result<Self> {
+        let mut config = Self::load_unresolved(path)?;
+        config.resolve_placeholders()?;
+        Ok(config)
+    }
+
+    /// Load + shape-validate only, without resolving placeholders. Used by
+    /// `validate`: an admin running `ferrometer validate` from a shell does
+    /// not have the service's `STATE_DIRECTORY` / `CREDENTIALS_DIRECTORY`
+    /// env vars in scope, but the config is still well-formed.
+    pub fn load_unresolved(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path).map_err(|e| {
             Error::Config(format!("failed to read {}: {e}", path.display()))
         })?;
@@ -342,6 +356,54 @@ impl Config {
             .map_err(|e| Error::Config(format!("failed to parse config: {e}")))?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Walk every placeholder-bearing field and substitute. The set of fields
+    /// is listed here explicitly rather than derived reflectively so the
+    /// contract is obvious at the call site.
+    fn resolve_placeholders(&mut self) -> Result<()> {
+        let instance_name = self.instance.name.clone();
+
+        for (_, collector) in &mut self.metrics.collectors {
+            match collector {
+                CollectorConfig::Unix(_) => {}
+                CollectorConfig::Prometheus(c) => {
+                    if let Some(p) = c.password_file.take() {
+                        c.password_file = Some(expand_path(&p, &instance_name)?);
+                    }
+                }
+            }
+        }
+
+        for (_, forwarder) in &mut self.metrics.forwarders {
+            match forwarder {
+                ForwarderConfig::Otlphttp(c) => {
+                    if let Some(p) = c.password_file.take() {
+                        c.password_file = Some(expand_path(&p, &instance_name)?);
+                    }
+                    for v in c.resource_attributes.values_mut() {
+                        *v = expand_placeholders(v, &instance_name)?;
+                    }
+                }
+            }
+        }
+
+        for (_, shipper) in &mut self.logs.shippers {
+            match &mut shipper.source {
+                LogSourceConfig::Journald(c) => {
+                    c.cursor_file = expand_path(&c.cursor_file, &instance_name)?;
+                }
+            }
+            match &mut shipper.sink {
+                LogSinkConfig::Loki(c) => {
+                    if let Some(p) = c.password_file.take() {
+                        c.password_file = Some(expand_path(&p, &instance_name)?);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn validate(&self) -> Result<()> {
@@ -463,4 +525,55 @@ impl Config {
         }
         Ok(())
     }
+}
+
+// Placeholder expansion
+//
+// Supported forms inside `${...}`:
+//   env:VAR          — value of environment variable VAR
+//   instance.name    — the top-level [instance].name
+//   version          — ferrometer's own version (CARGO_PKG_VERSION)
+//
+// Unknown placeholders and unset env vars are hard errors at load time.
+
+pub(crate) fn expand_placeholders(s: &str, instance_name: &str) -> Result<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            return Err(Error::Config(format!(
+                "unterminated placeholder in config value '{s}'"
+            )));
+        };
+        let inner = &after[..end];
+        let value = resolve_placeholder(inner, instance_name)
+            .map_err(|e| Error::Config(format!("in config value '{s}': {e}")))?;
+        out.push_str(&value);
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+fn resolve_placeholder(inner: &str, instance_name: &str) -> std::result::Result<String, String> {
+    if inner == "instance.name" {
+        Ok(instance_name.to_string())
+    } else if inner == "version" {
+        Ok(env!("CARGO_PKG_VERSION").to_string())
+    } else if let Some(name) = inner.strip_prefix("env:") {
+        std::env::var(name).map_err(|_| {
+            format!("${{env:{name}}} referenced but environment variable '{name}' is not set")
+        })
+    } else {
+        Err(format!("unknown placeholder '${{{inner}}}'"))
+    }
+}
+
+fn expand_path(p: &Path, instance_name: &str) -> Result<PathBuf> {
+    let s = p.to_str().ok_or_else(|| {
+        Error::Config(format!("non-utf8 path in config: {}", p.display()))
+    })?;
+    Ok(PathBuf::from(expand_placeholders(s, instance_name)?))
 }

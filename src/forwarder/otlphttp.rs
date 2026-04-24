@@ -63,11 +63,7 @@ struct EncoderState {
 }
 
 impl OtlphttpForwarder {
-    pub async fn new(
-        name: &str,
-        config: &OtlphttpForwarderConfig,
-        instance_name: &str,
-    ) -> Result<Arc<Self>> {
+    pub async fn new(name: &str, config: &OtlphttpForwarderConfig) -> Result<Arc<Self>> {
         let password = match &config.password_file {
             Some(path) => {
                 let content = tokio::fs::read_to_string(path).await.map_err(|e| {
@@ -99,16 +95,12 @@ impl OtlphttpForwarder {
             .build()
             .map_err(|e| Error::Forwarder(format!("failed to create HTTP client: {e}")))?;
 
+        // Values are already placeholder-expanded at config load time.
         let resource_attributes: Arc<Vec<KeyValue>> = Arc::new(
             config
                 .resource_attributes
                 .iter()
-                .map(|(k, v)| {
-                    let resolved = v
-                        .replace("${instance.name}", instance_name)
-                        .replace("${version}", env!("CARGO_PKG_VERSION"));
-                    kv(k, &resolved)
-                })
+                .map(|(k, v)| kv(k, v))
                 .collect(),
         );
 

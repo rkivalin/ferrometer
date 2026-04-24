@@ -1,6 +1,7 @@
 [Unit]
 Description=Ferrometer telemetry collector
-After=network-online.target
+Documentation=https://github.com/rkivalin/ferrometer
+After=network-online.target systemd-journald.service
 Wants=network-online.target
 
 [Service]
@@ -9,17 +10,55 @@ ExecStart=/usr/bin/ferrometer run
 Restart=on-failure
 RestartSec=5s
 
-# Hardening
-PrivateTmp=yes
+# Run as a dedicated dynamic user. systemd auto-creates a transient
+# ferrometer user/group at start and releases them on stop, so no
+# packaging fragments are needed. StateDirectory gives us a writable
+# /var/lib/ferrometer (owned by the dynamic UID each start) for the
+# journald cursor file. SupplementaryGroups grants read access to the
+# persistent and volatile journals, which are 2755 root:systemd-journal.
+DynamicUser=yes
+StateDirectory=ferrometer
+StateDirectoryMode=0700
+SupplementaryGroups=systemd-journal
+
+# Credentials. Uncomment and point at ciphertext in /etc/credstore.encrypted
+# (see systemd-creds(1)). Decrypted plaintext appears under
+# /run/credentials/ferrometer/<name> at service start.
+# LoadCredentialEncrypted=otlp-password:/etc/credstore.encrypted/ferrometer-otlp-password
+# LoadCredentialEncrypted=loki-password:/etc/credstore.encrypted/ferrometer-loki-password
+
+# --- Hardening (see systemd.exec(5)) ---
 NoNewPrivileges=yes
-ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+PrivateUsers=yes
+ProtectSystem=strict
+# read-only (not yes) so statvfs on /home and /root returns real
+# filesystem stats instead of systemd's tmpfs overlay.
+ProtectHome=read-only
+ProtectClock=yes
+ProtectHostname=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
+ProtectKernelLogs=yes
 ProtectControlGroups=yes
+ProtectProc=invisible
+# Do NOT set ProcSubset=pid — the unix collector reads global files
+# under /proc (stat, meminfo, loadavg, diskstats, net/dev, mounts) that
+# setting would hide.
 RestrictSUIDSGID=yes
-
-# Credentials
-# LoadCredentialEncrypted=otlp-password:/etc/credstore.encrypted/ferrometer-otlp-password
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

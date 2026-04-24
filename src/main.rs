@@ -60,7 +60,10 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
         }
         Command::Validate => {
-            let config = config::Config::load(&cli.config)?;
+            // load_unresolved skips placeholder expansion so admins can
+            // validate a config from their shell without STATE_DIRECTORY
+            // and CREDENTIALS_DIRECTORY set.
+            let config = config::Config::load_unresolved(&cli.config)?;
             println!(
                 "Configuration is valid. {} collector(s), {} forwarder(s), {} log shipper(s) configured.",
                 config.metrics.collectors.len(),

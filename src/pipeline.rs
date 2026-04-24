@@ -44,8 +44,6 @@ struct Finished {
 }
 
 pub async fn run(config: Config) -> Result<()> {
-    let instance_name = config.instance.name.clone();
-
     // Build collectors into Scheduled entries.
     let now = Instant::now();
     let mut scheduleds: Vec<Scheduled> = Vec::new();
@@ -66,7 +64,7 @@ pub async fn run(config: Config) -> Result<()> {
     let mut forwarders: Vec<Arc<dyn Forwarder>> = Vec::new();
     let mut forwarder_tasks: Vec<JoinHandle<Result<()>>> = Vec::new();
     for (name, forwarder_config) in &config.metrics.forwarders {
-        let fwd = build_forwarder(name, forwarder_config, &instance_name).await?;
+        let fwd = build_forwarder(name, forwarder_config).await?;
         let run_fwd = fwd.clone();
         forwarder_tasks.push(tokio::spawn(async move { run_fwd.run().await }));
         forwarders.push(fwd);
@@ -265,20 +263,13 @@ async fn build_collector(
     }
 }
 
-async fn build_forwarder(
-    name: &str,
-    config: &ForwarderConfig,
-    instance_name: &str,
-) -> Result<Arc<dyn Forwarder>> {
+async fn build_forwarder(name: &str, config: &ForwarderConfig) -> Result<Arc<dyn Forwarder>> {
     match config {
         #[cfg(feature = "forwarder-otlphttp")]
-        ForwarderConfig::Otlphttp(c) => Ok(
-            crate::forwarder::otlphttp::OtlphttpForwarder::new(name, c, instance_name)
-                .await?,
-        ),
+        ForwarderConfig::Otlphttp(c) =>
+            Ok(crate::forwarder::otlphttp::OtlphttpForwarder::new(name, c).await?),
         #[cfg(not(feature = "forwarder-otlphttp"))]
         ForwarderConfig::Otlphttp(_) => {
-            let _ = instance_name;
             Err(crate::error::Error::Config(format!(
                 "forwarder {name}: otlphttp forwarder not compiled (enable feature 'forwarder-otlphttp')"
             )))

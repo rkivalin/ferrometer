@@ -7,7 +7,7 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/rkivalin/ferrometer'
 license=('MIT')
 depends=('systemd-libs')
-makedepends=('rustup' 'protobuf')
+makedepends=('rustup' 'protobuf' 'pkgconf')
 backup=('etc/ferrometer/config.toml')
 options=(!lto !debug)
 
