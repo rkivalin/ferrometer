@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use systemd::journal::{Journal, JournalRecord, OpenOptions};
@@ -166,7 +166,11 @@ impl JournaldSource {
                         .journal
                         .cursor()
                         .map_err(|e| Error::Source(format!("cursor: {e}")))?;
-                    batch.entries.push(self.record_to_entry(record));
+                    let timestamp = self
+                        .journal
+                        .timestamp()
+                        .map_err(|e| Error::Source(format!("timestamp: {e}")))?;
+                    batch.entries.push(self.record_to_entry(record, timestamp));
                     batch.end_cursor = cursor;
                 }
                 None => break,
@@ -175,13 +179,8 @@ impl JournaldSource {
         Ok(())
     }
 
-    fn record_to_entry(&self, mut record: JournalRecord) -> LogEntry {
+    fn record_to_entry(&self, mut record: JournalRecord, timestamp: SystemTime) -> LogEntry {
         let message = record.remove("MESSAGE").unwrap_or_default();
-        let timestamp = record
-            .get("__REALTIME_TIMESTAMP")
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(|us| UNIX_EPOCH + Duration::from_micros(us))
-            .unwrap_or_else(SystemTime::now);
 
         // Start with static labels, overlay dynamic mapping on top so
         // config.labels wins over static_labels when both target the same
