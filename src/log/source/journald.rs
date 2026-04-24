@@ -186,14 +186,14 @@ impl JournaldSource {
         // config.labels wins over static_labels when both target the same
         // key (unusual but well-defined).
         let mut labels = self.static_labels.clone();
-        for (journal_key, label_name) in &self.labels_map {
+        for (label_name, journal_key) in &self.labels_map {
             if let Some(value) = record.get(journal_key) {
                 labels.insert(label_name.clone(), value.clone());
             }
         }
 
         let mut metadata = BTreeMap::new();
-        for (journal_key, meta_name) in &self.metadata_map {
+        for (meta_name, journal_key) in &self.metadata_map {
             if let Some(value) = record.get(journal_key) {
                 metadata.insert(meta_name.clone(), value.clone());
             }

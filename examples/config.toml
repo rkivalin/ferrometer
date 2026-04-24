@@ -117,27 +117,29 @@ collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname
 # cursor-file = "${env:STATE_DIRECTORY}/journal.cursor"
 # runtime-only = false       # true = only /run/log/journal (volatile)
 #
-# # source_field → loki_label_name (stream labels — low cardinality).
+# # label_name = journal_field. Entries missing the source field don't
+# # get the label. Stream labels should stay low cardinality — each
+# # unique combination of label values opens a new Loki stream.
 # [logs.shippers.journal.source.labels]
-# "_SYSTEMD_UNIT" = "unit"
-# "PRIORITY" = "priority"
+# unit = "_SYSTEMD_UNIT"
+# priority = "PRIORITY"
 #
 # # Static labels added to every entry. "instance" is auto-injected from
 # # [instance.name] and does not need to be listed here.
 # [logs.shippers.journal.source.static-labels]
 # job = "ferrometer"
 #
-# # source_field → structured metadata name (per-entry, queryable, does not
-# # create new streams).
+# # metadata_name = journal_field. Per-entry, queryable, does not create
+# # new streams.
 # [logs.shippers.journal.source.metadata]
-# "_PID" = "pid"
-# "SYSLOG_IDENTIFIER" = "syslog_identifier"
-# "SYSLOG_FACILITY" = "syslog_facility"
-# "_TRANSPORT" = "transport"
-# "_HOSTNAME" = "hostname"
-# "_BOOT_ID" = "boot_id"
-# "_MACHINE_ID" = "machine_id"
-# "_CMDLINE" = "cmdline"
+# pid = "_PID"
+# syslog_identifier = "SYSLOG_IDENTIFIER"
+# syslog_facility = "SYSLOG_FACILITY"
+# transport = "_TRANSPORT"
+# hostname = "_HOSTNAME"
+# boot_id = "_BOOT_ID"
+# machine_id = "_MACHINE_ID"
+# cmdline = "_CMDLINE"
 #
 # [logs.shippers.journal.sink]
 # type = "loki"

@@ -65,14 +65,15 @@ pub struct JournaldSourceConfig {
     pub cursor_file: PathBuf,
     #[serde(default)]
     pub runtime_only: bool,
-    /// Source-field → label-name. Dropped on entry read if the source field
-    /// is absent. Produces stream labels (low cardinality).
+    /// label-name → journal-field. The journal-field's value becomes the
+    /// label's value on each entry; entries missing the field get no such
+    /// label. Produces stream labels (low cardinality).
     #[serde(default = "default_journald_labels")]
     pub labels: std::collections::BTreeMap<String, String>,
     /// Static labels added to every entry regardless of source fields.
     #[serde(default)]
     pub static_labels: std::collections::BTreeMap<String, String>,
-    /// Source-field → metadata-name. Per-entry, not stream-generating.
+    /// metadata-name → journal-field. Per-entry, not stream-generating.
     #[serde(default = "default_journald_metadata")]
     pub metadata: std::collections::BTreeMap<String, String>,
 }
@@ -109,7 +110,7 @@ fn default_journald_cursor_file() -> PathBuf {
 }
 
 fn default_journald_labels() -> std::collections::BTreeMap<String, String> {
-    [("_SYSTEMD_UNIT", "unit"), ("PRIORITY", "priority")]
+    [("unit", "_SYSTEMD_UNIT"), ("priority", "PRIORITY")]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
@@ -117,14 +118,14 @@ fn default_journald_labels() -> std::collections::BTreeMap<String, String> {
 
 fn default_journald_metadata() -> std::collections::BTreeMap<String, String> {
     [
-        ("_PID", "pid"),
-        ("SYSLOG_IDENTIFIER", "syslog_identifier"),
-        ("SYSLOG_FACILITY", "syslog_facility"),
-        ("_TRANSPORT", "transport"),
-        ("_HOSTNAME", "hostname"),
-        ("_BOOT_ID", "boot_id"),
-        ("_MACHINE_ID", "machine_id"),
-        ("_CMDLINE", "cmdline"),
+        ("pid", "_PID"),
+        ("syslog_identifier", "SYSLOG_IDENTIFIER"),
+        ("syslog_facility", "SYSLOG_FACILITY"),
+        ("transport", "_TRANSPORT"),
+        ("hostname", "_HOSTNAME"),
+        ("boot_id", "_BOOT_ID"),
+        ("machine_id", "_MACHINE_ID"),
+        ("cmdline", "_CMDLINE"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
