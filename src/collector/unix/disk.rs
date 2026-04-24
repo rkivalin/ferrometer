@@ -14,7 +14,7 @@ pub fn collect(cache: &mut LabelCache, filter: &Regex) -> Result<Vec<Metric>> {
             continue;
         }
 
-        let pairs: &[(&'static str, f64, MetricType)] = &[
+        let mut pairs: Vec<(&'static str, f64, MetricType)> = vec![
             (
                 "node_disk_reads_completed_total",
                 disk.reads as f64,
@@ -57,11 +57,51 @@ pub fn collect(cache: &mut LabelCache, filter: &Regex) -> Result<Vec<Metric>> {
             ),
         ];
 
+        // Discards — available on kernels >= 4.18. Option since the fields
+        // may be absent on older kernels.
+        if let Some(discards) = disk.discards {
+            pairs.push((
+                "node_disk_discards_completed_total",
+                discards as f64,
+                MetricType::Counter,
+            ));
+        }
+        if let Some(sectors) = disk.sectors_discarded {
+            pairs.push((
+                "node_disk_discarded_sectors_total",
+                sectors as f64,
+                MetricType::Counter,
+            ));
+        }
+        if let Some(time) = disk.time_discarding {
+            pairs.push((
+                "node_disk_discard_time_seconds_total",
+                time as f64 / 1000.0,
+                MetricType::Counter,
+            ));
+        }
+
+        // Flushes (fsyncs) — available on kernels >= 5.5.
+        if let Some(flushes) = disk.flushes {
+            pairs.push((
+                "node_disk_flush_requests_total",
+                flushes as f64,
+                MetricType::Counter,
+            ));
+        }
+        if let Some(time) = disk.time_flushing {
+            pairs.push((
+                "node_disk_flush_requests_time_seconds_total",
+                time as f64 / 1000.0,
+                MetricType::Counter,
+            ));
+        }
+
         let mut labels = Labels::new();
         labels.insert("device".into(), disk.name.clone());
         let labels = cache.intern(labels);
 
-        for (name, value, mtype) in pairs {
+        for (name, value, mtype) in &pairs {
             let metric = match mtype {
                 MetricType::Gauge => Metric::gauge(name, *value, labels.clone()),
                 MetricType::Counter => Metric::counter(name, *value, labels.clone()),
