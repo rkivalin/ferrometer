@@ -115,7 +115,12 @@ async fn spawn_logs(
         let sink: Box<dyn Sink> = match shipper_config.sink {
             LogSinkConfig::Loki(cfg) => Box::new(LokiSink::new(&name, &cfg).await?),
         };
-        let shipper = Shipper::new(source, sink);
+        let shipper = Shipper::new(
+            source,
+            sink,
+            shipper_config.backoff_initial,
+            shipper_config.backoff_max,
+        );
         handles.push(tokio::task::spawn_local(shipper.run()));
     }
     Ok(handles)

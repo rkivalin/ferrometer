@@ -37,10 +37,33 @@ pub struct LogsConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[allow(dead_code)] // Fields consumed only when log features are compiled.
 pub struct ShipperConfig {
     pub source: LogSourceConfig,
     pub sink: LogSinkConfig,
+    /// Exponential backoff for failed ships. Doubles on each consecutive
+    /// failure up to `backoff-max`; resets on success. Owned here (not on
+    /// the sink) because the retry loop lives in the shipper and is
+    /// sink-agnostic.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        default = "default_shipper_backoff_initial"
+    )]
+    pub backoff_initial: Duration,
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        default = "default_shipper_backoff_max"
+    )]
+    pub backoff_max: Duration,
+}
+
+fn default_shipper_backoff_initial() -> Duration {
+    Duration::from_secs(1)
+}
+
+fn default_shipper_backoff_max() -> Duration {
+    Duration::from_secs(300)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -438,6 +461,14 @@ impl Config {
                 ForwarderConfig::Otlphttp(otlp) => {
                     self.validate_otlphttp_forwarder(name, otlp)?;
                 }
+            }
+        }
+
+        for (name, shipper) in &self.logs.shippers {
+            if shipper.backoff_initial > shipper.backoff_max {
+                return Err(Error::Config(format!(
+                    "shipper {name}: backoff-initial must not exceed backoff-max"
+                )));
             }
         }
 

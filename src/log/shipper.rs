@@ -24,12 +24,17 @@ pub struct Shipper {
 }
 
 impl Shipper {
-    pub fn new(source: Box<dyn Source>, sink: Box<dyn Sink>) -> Self {
+    pub fn new(
+        source: Box<dyn Source>,
+        sink: Box<dyn Sink>,
+        backoff_initial: Duration,
+        backoff_max: Duration,
+    ) -> Self {
         Self {
             source,
             sink,
-            backoff_initial: Duration::from_secs(1),
-            backoff_max: Duration::from_secs(300),
+            backoff_initial,
+            backoff_max,
         }
     }
 

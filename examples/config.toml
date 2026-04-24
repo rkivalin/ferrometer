@@ -108,6 +108,10 @@ collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname
 # ---------------------------------------------------------------------------
 
 # [logs.shippers.journal]
+# # Exponential backoff for failed ships; doubles per consecutive failure
+# # up to backoff-max, resets on success.
+# backoff-initial = "1s"
+# backoff-max = "5m"
 #
 # [logs.shippers.journal.source]
 # type = "journald"
