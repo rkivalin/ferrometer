@@ -200,6 +200,11 @@ pub struct UnixCollectorConfig {
     pub net_devices: String,
     #[serde(default = "default_unix_collectors")]
     pub collectors: Vec<String>,
+    /// Static labels added to every emitted metric. Nothing is auto-injected;
+    /// to carry an `instance`-like identifier prefer the forwarder's
+    /// resource-attributes config (OTel semantic convention).
+    #[serde(default)]
+    pub static_labels: std::collections::BTreeMap<String, String>,
 }
 
 fn default_unix_max_runtime() -> Duration {

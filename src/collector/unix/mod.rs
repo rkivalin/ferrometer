@@ -25,9 +25,10 @@ pub struct UnixCollector {
 }
 
 impl UnixCollector {
-    pub fn new(name: &str, config: &UnixCollectorConfig, instance: &str) -> Result<Self> {
-        let mut base = Labels::new();
-        base.insert("instance".to_string(), instance.to_string());
+    pub fn new(name: &str, config: &UnixCollectorConfig) -> Result<Self> {
+        let base: Labels = config.static_labels.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         Ok(Self {
             name: name.to_string(),
             enabled: config.collectors.clone(),

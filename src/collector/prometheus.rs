@@ -22,7 +22,6 @@ impl PrometheusScraper {
     pub async fn new(
         name: &str,
         config: &PrometheusCollectorConfig,
-        instance: &str,
     ) -> Result<Self> {
         let password = match &config.password_file {
             Some(path) => {
@@ -50,14 +49,14 @@ impl PrometheusScraper {
                 Error::Collector(format!("failed to create HTTP client: {e}"))
             })?;
 
-        // Base labels: instance first, then user's static-labels. Static
-        // labels win on conflict (intentional — lets users override instance
-        // if they really need to, and job-like labels are authoritative).
-        let mut base = Labels::new();
-        base.insert("instance".to_string(), instance.to_string());
-        for (k, v) in &config.static_labels {
-            base.insert(k.clone(), v.clone());
-        }
+        // Base labels come purely from user config. Nothing is auto-injected
+        // — instance/host identity lives in the forwarder's resource
+        // attributes per OTel semantic convention.
+        let base: Labels = config
+            .static_labels
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
 
         Ok(Self {
             name: name.to_string(),

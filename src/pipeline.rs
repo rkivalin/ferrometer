@@ -50,7 +50,7 @@ pub async fn run(config: Config) -> Result<()> {
     let now = Instant::now();
     let mut scheduleds: Vec<Scheduled> = Vec::new();
     for (name, cc) in &config.metrics.collectors {
-        let collector = build_collector(name, cc, &instance_name).await?;
+        let collector = build_collector(name, cc).await?;
         let (interval, max_runtime) = collector_schedule_params(cc);
         scheduleds.push(Scheduled {
             name: name.clone(),
@@ -244,21 +244,19 @@ fn collector_schedule_params(cc: &CollectorConfig) -> (Duration, Duration) {
 async fn build_collector(
     name: &str,
     config: &CollectorConfig,
-    instance_name: &str,
 ) -> Result<Box<dyn Collector>> {
     match config {
         #[cfg(feature = "collector-unix")]
-        CollectorConfig::Unix(c) => Ok(Box::new(
-            crate::collector::unix::UnixCollector::new(name, c, instance_name)?,
-        )),
+        CollectorConfig::Unix(c) => {
+            Ok(Box::new(crate::collector::unix::UnixCollector::new(name, c)?))
+        }
         #[cfg(not(feature = "collector-unix"))]
         CollectorConfig::Unix(_) => Err(crate::error::Error::Config(format!(
             "collector {name}: unix collector not compiled (enable feature 'collector-unix')"
         ))),
         #[cfg(feature = "collector-prometheus")]
         CollectorConfig::Prometheus(c) => Ok(Box::new(
-            crate::collector::prometheus::PrometheusScraper::new(name, c, instance_name)
-                .await?,
+            crate::collector::prometheus::PrometheusScraper::new(name, c).await?,
         )),
         #[cfg(not(feature = "collector-prometheus"))]
         CollectorConfig::Prometheus(_) => Err(crate::error::Error::Config(format!(

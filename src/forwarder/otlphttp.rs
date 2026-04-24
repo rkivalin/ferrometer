@@ -104,7 +104,9 @@ impl OtlphttpForwarder {
                 .resource_attributes
                 .iter()
                 .map(|(k, v)| {
-                    let resolved = v.replace("${instance.name}", instance_name);
+                    let resolved = v
+                        .replace("${instance.name}", instance_name)
+                        .replace("${version}", env!("CARGO_PKG_VERSION"));
                     kv(k, &resolved)
                 })
                 .collect(),
