@@ -46,7 +46,7 @@ tokio = { version = "1", features = ["macros", "rt", "time", "signal", "sync", "
 async-trait = "0.1"
 
 # Unix collector
-procfs = { version = "0.17", optional = true }
+procfs = { version = "0.18", optional = true }
 regex = { version = "1", optional = true }
 nix = { version = "0.31", features = ["fs", "feature"], optional = true }
 
