@@ -20,6 +20,49 @@ pub struct InstanceConfig {
     pub name: String,
 }
 
+/// Shared TLS configuration. Flattened into every component that talks to
+/// an HTTP backend. Orthogonal to AuthConfig: mTLS provides transport
+/// identity, AuthConfig provides per-request credentials; either can be
+/// used alone or together.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)] // Fields read by tls::configure at component build time.
+pub struct TlsConfig {
+    /// PEM-encoded client certificate (chain) for mTLS. May also contain
+    /// the private key, in which case `client-key-file` can be omitted.
+    pub client_cert_file: Option<PathBuf>,
+    /// PEM-encoded private key. Optional; defaults to looking inside
+    /// `client-cert-file`.
+    pub client_key_file: Option<PathBuf>,
+    /// PEM-encoded CA bundle to add to the trust store. Useful for
+    /// trusting a private CA that signed the server's certificate.
+    pub ca_cert_file: Option<PathBuf>,
+}
+
+impl TlsConfig {
+    pub fn validate(&self, ctx: &str) -> Result<()> {
+        if self.client_key_file.is_some() && self.client_cert_file.is_none() {
+            return Err(Error::Config(format!(
+                "{ctx}: client-key-file is set but client-cert-file is not"
+            )));
+        }
+        Ok(())
+    }
+
+    fn resolve_placeholders(&mut self, instance_name: &str) -> Result<()> {
+        if let Some(p) = self.client_cert_file.take() {
+            self.client_cert_file = Some(expand_path(&p, instance_name)?);
+        }
+        if let Some(p) = self.client_key_file.take() {
+            self.client_key_file = Some(expand_path(&p, instance_name)?);
+        }
+        if let Some(p) = self.ca_cert_file.take() {
+            self.ca_cert_file = Some(expand_path(&p, instance_name)?);
+        }
+        Ok(())
+    }
+}
+
 /// Shared auth configuration. Flattened into every component that talks to
 /// an HTTP backend (OTLP forwarder, Loki sink, Prometheus scraper). Exactly
 /// one of {basic, bearer, authorization} may be set.
@@ -201,6 +244,8 @@ pub struct LokiSinkConfig {
     pub endpoint: String,
     #[serde(flatten)]
     pub auth: AuthConfig,
+    #[serde(flatten)]
+    pub tls: TlsConfig,
 }
 
 fn default_journald_batch_size() -> usize {
@@ -276,6 +321,8 @@ pub struct PrometheusCollectorConfig {
     pub max_runtime: Duration,
     #[serde(flatten)]
     pub auth: AuthConfig,
+    #[serde(flatten)]
+    pub tls: TlsConfig,
     /// Static labels added to every scraped metric. `instance` is
     /// auto-injected from [instance.name] and does not need to be listed
     /// here (though an explicit entry here would win).
@@ -336,6 +383,8 @@ pub struct OtlphttpForwarderConfig {
     pub endpoint: String,
     #[serde(flatten)]
     pub auth: AuthConfig,
+    #[serde(flatten)]
+    pub tls: TlsConfig,
     #[serde(default)]
     pub compression: Compression,
     #[serde(
@@ -479,6 +528,7 @@ impl Config {
                 CollectorConfig::Unix(_) => {}
                 CollectorConfig::Prometheus(c) => {
                     c.auth.resolve_placeholders(&instance_name)?;
+                    c.tls.resolve_placeholders(&instance_name)?;
                 }
             }
         }
@@ -487,6 +537,7 @@ impl Config {
             match forwarder {
                 ForwarderConfig::Otlphttp(c) => {
                     c.auth.resolve_placeholders(&instance_name)?;
+                    c.tls.resolve_placeholders(&instance_name)?;
                     for v in c.resource_attributes.values_mut() {
                         *v = expand_placeholders(v, &instance_name)?;
                     }
@@ -503,6 +554,7 @@ impl Config {
             match &mut shipper.sink {
                 LogSinkConfig::Loki(c) => {
                     c.auth.resolve_placeholders(&instance_name)?;
+                    c.tls.resolve_placeholders(&instance_name)?;
                 }
             }
         }
@@ -553,6 +605,7 @@ impl Config {
             match &shipper.sink {
                 LogSinkConfig::Loki(c) => {
                     c.auth.validate(&format!("shipper {name} sink"))?;
+                    c.tls.validate(&format!("shipper {name} sink"))?;
                 }
             }
         }
@@ -603,6 +656,7 @@ impl Config {
             )));
         }
         config.auth.validate(&format!("collector {name}"))?;
+        config.tls.validate(&format!("collector {name}"))?;
         Ok(())
     }
 
@@ -617,6 +671,7 @@ impl Config {
             )));
         }
         config.auth.validate(&format!("forwarder {name}"))?;
+        config.tls.validate(&format!("forwarder {name}"))?;
         if config.buffer_max_metrics == 0 {
             return Err(Error::Config(format!(
                 "forwarder {name}: buffer-max-metrics must be greater than 0"

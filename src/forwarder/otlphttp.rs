@@ -16,6 +16,7 @@ use crate::auth;
 use crate::config::{Compression, OtlphttpForwarderConfig};
 use crate::error::{Error, Result};
 use crate::forwarder::Forwarder;
+use crate::tls;
 use crate::proto::opentelemetry::proto::{
     collector::metrics::v1::ExportMetricsServiceRequest,
     common::v1::{AnyValue, KeyValue, any_value},
@@ -73,7 +74,8 @@ impl OtlphttpForwarder {
             format!("{endpoint}/v1/metrics")
         };
 
-        let client = reqwest::Client::builder()
+        let builder = tls::configure(reqwest::Client::builder(), &config.tls).await?;
+        let client = builder
             .timeout(config.timeout)
             .build()
             .map_err(|e| Error::Forwarder(format!("failed to create HTTP client: {e}")))?;

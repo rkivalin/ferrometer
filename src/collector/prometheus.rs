@@ -9,6 +9,7 @@ use crate::collector::label_cache::LabelCache;
 use crate::config::PrometheusCollectorConfig;
 use crate::error::{Error, Result};
 use crate::signal::{Labels, Metric, MetricType};
+use crate::tls;
 
 pub struct PrometheusScraper {
     name: String,
@@ -25,7 +26,8 @@ impl PrometheusScraper {
     ) -> Result<Self> {
         let auth_header = auth::resolve_header(&config.auth).await?;
 
-        let client = reqwest::Client::builder()
+        let builder = tls::configure(reqwest::Client::builder(), &config.tls).await?;
+        let client = builder
             .timeout(config.scrape_timeout)
             .build()
             .map_err(|e| {

@@ -84,6 +84,18 @@ collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname
 # # bearer-token = "${env:OTLP_TOKEN}"
 # # authorization = "Bearer ${env:OTLP_TOKEN}"
 #
+# # mTLS / custom CA (optional, orthogonal to auth above):
+# #   client-cert-file       — PEM client certificate (chain). May contain
+# #                            the private key too, in which case
+# #                            client-key-file can be omitted.
+# #   client-key-file        — PEM private key (separate file). Optional.
+# #   ca-cert-file           — PEM CA bundle to add to the trust store.
+# #                            Use alone for server-cert pinning; combine
+# #                            with client-cert/key for full mTLS.
+# # client-cert-file = "/etc/ferrometer/client.pem"
+# # client-key-file = "${env:CREDENTIALS_DIRECTORY}/client.key"
+# # ca-cert-file = "/etc/ferrometer/internal-ca.pem"
+#
 # # Optional tuning (shown with defaults):
 # compression = "gzip"            # "gzip" or "none"
 # timeout = "30s"                 # HTTP request timeout

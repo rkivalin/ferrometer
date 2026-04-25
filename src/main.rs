@@ -4,6 +4,12 @@
     feature = "log-sink-loki"
 ))]
 mod auth;
+#[cfg(any(
+    feature = "forwarder-otlphttp",
+    feature = "collector-prometheus",
+    feature = "log-sink-loki"
+))]
+mod tls;
 mod cli;
 mod collector;
 mod config;

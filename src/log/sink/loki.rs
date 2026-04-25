@@ -9,6 +9,7 @@ use crate::config::LokiSinkConfig;
 use crate::error::{Error, Result};
 use crate::log::sink::Sink;
 use crate::log::source::Batch;
+use crate::tls;
 
 /// Push sink for Grafana Loki using the native protobuf body + snappy
 /// block compression. Source-agnostic: ships whatever labels and metadata
@@ -70,7 +71,8 @@ impl LokiSink {
 
         let endpoint = normalize_endpoint(&config.endpoint);
 
-        let client = reqwest::Client::builder()
+        let builder = tls::configure(reqwest::Client::builder(), &config.tls).await?;
+        let client = builder
             .build()
             .map_err(|e| Error::Sink(format!("failed to create HTTP client: {e}")))?;
 
