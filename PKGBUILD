@@ -28,7 +28,7 @@ check() {
   cd "$startdir"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  cargo test --frozen
+  cargo test --frozen --release
 }
 
 package() {

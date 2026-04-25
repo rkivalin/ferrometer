@@ -523,7 +523,7 @@ impl Config {
     fn resolve_placeholders(&mut self) -> Result<()> {
         let instance_name = self.instance.name.clone();
 
-        for (_, collector) in &mut self.metrics.collectors {
+        for collector in self.metrics.collectors.values_mut() {
             match collector {
                 CollectorConfig::Unix(_) => {}
                 CollectorConfig::Prometheus(c) => {
@@ -533,7 +533,7 @@ impl Config {
             }
         }
 
-        for (_, forwarder) in &mut self.metrics.forwarders {
+        for forwarder in self.metrics.forwarders.values_mut() {
             match forwarder {
                 ForwarderConfig::Otlphttp(c) => {
                     c.auth.resolve_placeholders(&instance_name)?;
@@ -545,7 +545,7 @@ impl Config {
             }
         }
 
-        for (_, shipper) in &mut self.logs.shippers {
+        for shipper in self.logs.shippers.values_mut() {
             match &mut shipper.source {
                 LogSourceConfig::Journald(c) => {
                     c.cursor_file = expand_path(&c.cursor_file, &instance_name)?;
