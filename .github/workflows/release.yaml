@@ -34,15 +34,33 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          sudo apt-get install -y protobuf-compiler libsystemd-dev pkg-config
 
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+        run: |
+          # Add arm64 as a foreign architecture and point its package
+          # source at ports.ubuntu.com (Ubuntu's non-amd64 repo). The host
+          # sources stay amd64-only so apt doesn't try to fetch arm64 from
+          # them.
+          sudo dpkg --add-architecture arm64
+          sudo sed -i 's|^deb |deb [arch=amd64] |' /etc/apt/sources.list
+          codename=$(lsb_release -cs)
+          for suite in "$codename" "$codename-updates" "$codename-security"; do
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $suite main restricted universe multiverse" \
+              | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          done
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libsystemd-dev:arm64
 
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          # pkg-config-rs reads target-specific env vars when cross-compiling.
+          # Point it at the arm64 .pc files installed alongside the host's.
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_PATH_aarch64_unknown_linux_gnu: /usr/lib/aarch64-linux-gnu/pkgconfig
+          PKG_CONFIG_SYSROOT_DIR_aarch64_unknown_linux_gnu: /
         run: cargo build --release --locked --target "${{ matrix.target }}"
 
       - name: Run tests
@@ -100,7 +118,7 @@ jobs:
 
       - name: Build package
         run: |
-          pacman -Syu --noconfirm rustup protobuf
+          pacman -Syu --noconfirm rustup protobuf pkgconf systemd-libs
 
           useradd -m builder
           chown -R builder:builder .

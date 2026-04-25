@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - run: sudo apt-get install -y protobuf-compiler
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler libsystemd-dev pkg-config
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
