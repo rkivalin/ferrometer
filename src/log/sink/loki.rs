@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::time::UNIX_EPOCH;
 
 use async_trait::async_trait;
-use base64::Engine;
 use prost::Message as _;
 
+use crate::auth;
 use crate::config::LokiSinkConfig;
 use crate::error::{Error, Result};
 use crate::log::sink::Sink;
@@ -66,24 +66,7 @@ struct LabelPairAdapter {
 
 impl LokiSink {
     pub async fn new(name: &str, config: &LokiSinkConfig) -> Result<Self> {
-        let password = match &config.password_file {
-            Some(path) => {
-                let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-                    Error::FileRead {
-                        path: path.clone(),
-                        source: e,
-                    }
-                })?;
-                Some(content.trim().to_string())
-            }
-            None => None,
-        };
-
-        let auth_header = config.username.as_ref().zip(password).map(|(u, p)| {
-            let encoded =
-                base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}"));
-            format!("Basic {encoded}")
-        });
+        let auth_header = auth::resolve_header(&config.auth).await?;
 
         let endpoint = normalize_endpoint(&config.endpoint);
 

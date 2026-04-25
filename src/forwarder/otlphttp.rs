@@ -5,7 +5,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_compression::tokio::bufread::GzipEncoder;
 use async_trait::async_trait;
-use base64::Engine;
 use bytes::Bytes;
 use futures_util::stream;
 use prost::Message;
@@ -13,6 +12,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use tokio_util::io::{ReaderStream, StreamReader};
 
+use crate::auth;
 use crate::config::{Compression, OtlphttpForwarderConfig};
 use crate::error::{Error, Result};
 use crate::forwarder::Forwarder;
@@ -64,24 +64,7 @@ struct EncoderState {
 
 impl OtlphttpForwarder {
     pub async fn new(name: &str, config: &OtlphttpForwarderConfig) -> Result<Arc<Self>> {
-        let password = match &config.password_file {
-            Some(path) => {
-                let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-                    Error::FileRead {
-                        path: path.clone(),
-                        source: e,
-                    }
-                })?;
-                Some(content.trim().to_string())
-            }
-            None => None,
-        };
-
-        let auth_header = config.username.as_ref().zip(password).map(|(u, p)| {
-            let encoded =
-                base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}"));
-            format!("Basic {encoded}")
-        });
+        let auth_header = auth::resolve_header(&config.auth).await?;
 
         let endpoint = config.endpoint.trim_end_matches('/').to_string();
         let endpoint = if endpoint.ends_with("/v1/metrics") {

@@ -20,6 +20,92 @@ pub struct InstanceConfig {
     pub name: String,
 }
 
+/// Shared auth configuration. Flattened into every component that talks to
+/// an HTTP backend (OTLP forwarder, Loki sink, Prometheus scraper). Exactly
+/// one of {basic, bearer, authorization} may be set.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)] // Fields read by auth::resolve_header at component build time.
+pub struct AuthConfig {
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub password_file: Option<PathBuf>,
+    pub bearer_token: Option<String>,
+    pub bearer_token_file: Option<PathBuf>,
+    /// Full Authorization header value. Escape hatch for digest, custom
+    /// schemes, etc. Composes with `${env:VAR}` for things like
+    /// `authorization = "Bearer ${env:OTLP_TOKEN}"`.
+    pub authorization: Option<String>,
+}
+
+impl AuthConfig {
+    /// Structural validation. Run at config load.
+    pub fn validate(&self, ctx: &str) -> Result<()> {
+        let basic = self.username.is_some()
+            || self.password.is_some()
+            || self.password_file.is_some();
+        let bearer = self.bearer_token.is_some() || self.bearer_token_file.is_some();
+        let header = self.authorization.is_some();
+
+        let methods = (basic as u8) + (bearer as u8) + (header as u8);
+        if methods > 1 {
+            return Err(Error::Config(format!(
+                "{ctx}: multiple auth methods configured; pick one of \
+                 username/password[-file], bearer-token[-file], or authorization"
+            )));
+        }
+
+        if self.password.is_some() && self.password_file.is_some() {
+            return Err(Error::Config(format!(
+                "{ctx}: password and password-file are mutually exclusive"
+            )));
+        }
+        if self.bearer_token.is_some() && self.bearer_token_file.is_some() {
+            return Err(Error::Config(format!(
+                "{ctx}: bearer-token and bearer-token-file are mutually exclusive"
+            )));
+        }
+        if basic
+            && self.username.is_some()
+            && self.password.is_none()
+            && self.password_file.is_none()
+        {
+            return Err(Error::Config(format!(
+                "{ctx}: username set but no password / password-file"
+            )));
+        }
+        if basic && self.username.is_none() {
+            return Err(Error::Config(format!(
+                "{ctx}: password / password-file set but no username"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Resolve `${env:VAR}` etc. in every string-bearing field.
+    fn resolve_placeholders(&mut self, instance_name: &str) -> Result<()> {
+        if let Some(s) = self.username.take() {
+            self.username = Some(expand_placeholders(&s, instance_name)?);
+        }
+        if let Some(s) = self.password.take() {
+            self.password = Some(expand_placeholders(&s, instance_name)?);
+        }
+        if let Some(p) = self.password_file.take() {
+            self.password_file = Some(expand_path(&p, instance_name)?);
+        }
+        if let Some(s) = self.bearer_token.take() {
+            self.bearer_token = Some(expand_placeholders(&s, instance_name)?);
+        }
+        if let Some(p) = self.bearer_token_file.take() {
+            self.bearer_token_file = Some(expand_path(&p, instance_name)?);
+        }
+        if let Some(s) = self.authorization.take() {
+            self.authorization = Some(expand_placeholders(&s, instance_name)?);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct MetricsConfig {
     #[serde(default)]
@@ -113,8 +199,8 @@ pub enum LogSinkConfig {
 #[allow(dead_code)] // Fields are read only when log-sink-loki feature is enabled.
 pub struct LokiSinkConfig {
     pub endpoint: String,
-    pub username: Option<String>,
-    pub password_file: Option<PathBuf>,
+    #[serde(flatten)]
+    pub auth: AuthConfig,
 }
 
 fn default_journald_batch_size() -> usize {
@@ -188,8 +274,8 @@ pub struct PrometheusCollectorConfig {
         default = "default_prometheus_max_runtime"
     )]
     pub max_runtime: Duration,
-    pub username: Option<String>,
-    pub password_file: Option<PathBuf>,
+    #[serde(flatten)]
+    pub auth: AuthConfig,
     /// Static labels added to every scraped metric. `instance` is
     /// auto-injected from [instance.name] and does not need to be listed
     /// here (though an explicit entry here would win).
@@ -248,8 +334,8 @@ pub enum ForwarderConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct OtlphttpForwarderConfig {
     pub endpoint: String,
-    pub username: Option<String>,
-    pub password_file: Option<PathBuf>,
+    #[serde(flatten)]
+    pub auth: AuthConfig,
     #[serde(default)]
     pub compression: Compression,
     #[serde(
@@ -392,9 +478,7 @@ impl Config {
             match collector {
                 CollectorConfig::Unix(_) => {}
                 CollectorConfig::Prometheus(c) => {
-                    if let Some(p) = c.password_file.take() {
-                        c.password_file = Some(expand_path(&p, &instance_name)?);
-                    }
+                    c.auth.resolve_placeholders(&instance_name)?;
                 }
             }
         }
@@ -402,9 +486,7 @@ impl Config {
         for (_, forwarder) in &mut self.metrics.forwarders {
             match forwarder {
                 ForwarderConfig::Otlphttp(c) => {
-                    if let Some(p) = c.password_file.take() {
-                        c.password_file = Some(expand_path(&p, &instance_name)?);
-                    }
+                    c.auth.resolve_placeholders(&instance_name)?;
                     for v in c.resource_attributes.values_mut() {
                         *v = expand_placeholders(v, &instance_name)?;
                     }
@@ -420,9 +502,7 @@ impl Config {
             }
             match &mut shipper.sink {
                 LogSinkConfig::Loki(c) => {
-                    if let Some(p) = c.password_file.take() {
-                        c.password_file = Some(expand_path(&p, &instance_name)?);
-                    }
+                    c.auth.resolve_placeholders(&instance_name)?;
                 }
             }
         }
@@ -469,6 +549,11 @@ impl Config {
                 return Err(Error::Config(format!(
                     "shipper {name}: backoff-initial must not exceed backoff-max"
                 )));
+            }
+            match &shipper.sink {
+                LogSinkConfig::Loki(c) => {
+                    c.auth.validate(&format!("shipper {name} sink"))?;
+                }
             }
         }
 
@@ -517,11 +602,7 @@ impl Config {
                 "collector {name}: url must not be empty"
             )));
         }
-        if config.username.is_some() && config.password_file.is_none() {
-            return Err(Error::Config(format!(
-                "collector {name}: password-file is required when username is set"
-            )));
-        }
+        config.auth.validate(&format!("collector {name}"))?;
         Ok(())
     }
 
@@ -535,11 +616,7 @@ impl Config {
                 "forwarder {name}: endpoint must not be empty"
             )));
         }
-        if config.username.is_some() && config.password_file.is_none() {
-            return Err(Error::Config(format!(
-                "forwarder {name}: password-file is required when username is set"
-            )));
-        }
+        config.auth.validate(&format!("forwarder {name}"))?;
         if config.buffer_max_metrics == 0 {
             return Err(Error::Config(format!(
                 "forwarder {name}: buffer-max-metrics must be greater than 0"

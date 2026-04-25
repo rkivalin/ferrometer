@@ -73,10 +73,16 @@ collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname
 # type = "otlphttp"
 # endpoint = "http://metrics.example.com:8428/opentelemetry"
 #
-# # Basic auth (optional). See README.md for wiring up the password via
-# # systemd encrypted credentials (LoadCredentialEncrypted=).
+# # Auth (optional). Pick one method:
+# #   • Basic:  username + (password OR password-file)
+# #   • Bearer: bearer-token OR bearer-token-file
+# #   • Custom: authorization (full Authorization header value)
+# # See README.md for wiring up secrets via systemd encrypted credentials
+# # (LoadCredentialEncrypted=). Any string field accepts ${env:VAR}.
 # username = "ferrometer"
 # password-file = "${env:CREDENTIALS_DIRECTORY}/otlp-password"
+# # bearer-token = "${env:OTLP_TOKEN}"
+# # authorization = "Bearer ${env:OTLP_TOKEN}"
 #
 # # Optional tuning (shown with defaults):
 # compression = "gzip"            # "gzip" or "none"

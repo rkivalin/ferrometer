@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use base64::Engine;
 use prometheus_parse::{Sample, Scrape, Value};
 
+use crate::auth;
 use crate::collector::Collector;
 use crate::collector::label_cache::LabelCache;
 use crate::config::PrometheusCollectorConfig;
@@ -23,24 +23,7 @@ impl PrometheusScraper {
         name: &str,
         config: &PrometheusCollectorConfig,
     ) -> Result<Self> {
-        let password = match &config.password_file {
-            Some(path) => {
-                let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-                    Error::FileRead {
-                        path: path.clone(),
-                        source: e,
-                    }
-                })?;
-                Some(content.trim().to_string())
-            }
-            None => None,
-        };
-
-        let auth_header = config.username.as_ref().zip(password).map(|(u, p)| {
-            let encoded =
-                base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}"));
-            format!("Basic {encoded}")
-        });
+        let auth_header = auth::resolve_header(&config.auth).await?;
 
         let client = reqwest::Client::builder()
             .timeout(config.scrape_timeout)
