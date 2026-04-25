@@ -1,30 +1,22 @@
 # ferrometer
 
-Lightweight telemetry collector written in Rust. Collects system metrics, tails the systemd journal, and forwards both to OTLP/Loki backends.
+Lightweight telemetry agent written in Rust. Collects Unix system metrics, scrapes Prometheus endpoints, tails the systemd journal, and forwards both metrics and logs to OTLP and Loki backends.
 
-Designed as a minimal alternative to Grafana Alloy / OpenTelemetry Collector for hosts that only need basic system metrics and log shipping.
+A minimal alternative to Grafana Alloy and the OpenTelemetry Collector for hosts that only need basic system metrics and log shipping. Resident set sits around 10 MB PSS in steady state, vs. several hundred MB for the alternatives.
 
 ## Features
 
-- **Unix system metrics**: CPU, memory, disk, filesystem, network, load average, uname
-- **Prometheus scraper**: pull text-exposition `/metrics` endpoints on an interval
-- **Journald log source**: tail the systemd journal from a persisted cursor
-- **OTLP HTTP forwarder**: push metrics to any OTLP-compatible backend (VictoriaMetrics, Grafana Mimir, etc.)
-- **Loki log sink**: push entries to Grafana Loki (native protobuf + snappy)
-- **Feature-flagged components**: build only what you need
-- **Small footprint**: ~5MB binary, ~5-10MB RSS (vs 300-500MB for Alloy)
-- **Hardened systemd unit**: runs as a transient `DynamicUser` with a locked-down sandbox (security exposure 1.2 per `systemd-analyze security`)
-- **TOML configuration**
+- **Unix system metrics** from `/proc` and `/sys` — CPU (incl. frequency / governor / thermal throttle), memory, disk (incl. discards and flushes), filesystem, network, load average, uname.
+- **Prometheus scraper** for any text-exposition `/metrics` endpoint.
+- **systemd journal source**, cursor-persisted across restarts so no entries get re-shipped or skipped. Journald is the durable buffer during a sink outage — no in-memory queue.
+- **OTLP HTTP forwarder** (VictoriaMetrics, Grafana Mimir, etc.) with gzip compression, an in-memory ring buffer for outage tolerance, and exponential backoff.
+- **Loki sink** speaking the native protobuf + snappy push API, with per-entry structured metadata.
+- **Auth**: basic, bearer, or arbitrary `Authorization` header. Secrets via env vars, files, or systemd encrypted credentials.
+- **mTLS** with optional custom CA bundle on every HTTP client.
+- **TOML config** with `${env:VAR}`, `${instance.name}`, `${version}` placeholder expansion and load-time validation.
+- **Hardened systemd unit** running as a transient `DynamicUser` inside a locked-down sandbox.
 
 ## Installation
-
-### From source
-
-Requires Rust 1.85+ and `protoc` (protobuf compiler).
-
-```sh
-cargo install --path .
-```
 
 ### Arch Linux
 
@@ -38,22 +30,17 @@ makepkg -si
 dpkg -i ferrometer_0.1.0-1_amd64.deb
 ```
 
-## Usage
+### From source
+
+Requires Rust 1.85+, `protoc`, `pkg-config`, and the libsystemd development headers.
 
 ```sh
-# Validate configuration
-ferrometer validate -c /etc/ferrometer/config.toml
-
-# Start collecting and forwarding
-ferrometer run -c /etc/ferrometer/config.toml
-
-# With debug logging
-ferrometer run -c /etc/ferrometer/config.toml -vv
+cargo install --path .
 ```
 
-## Configuration
+## Quickstart
 
-See [examples/config.toml](examples/config.toml) for a complete reference.
+A working metrics-only config:
 
 ```toml
 [instance]
@@ -61,77 +48,165 @@ name = "myhost"
 
 [metrics.collectors.system]
 type = "unix"
-interval = "15s"
-disk-devices = "^(nvme\\d+n\\d+|sd[a-z]+)$"
-net-devices = "^(eth|en|wl)"
 
 [metrics.forwarders.victoriametrics]
 type = "otlphttp"
 endpoint = "http://metrics.example.com:8428/opentelemetry"
-username = "ferrometer"
-password-file = "/run/credentials/ferrometer.service/otlp-password"
 ```
 
-## Feature flags
-
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `collector-unix` | yes | Unix system metrics from `/proc` and `/sys` |
-| `collector-prometheus` | yes | Pull Prometheus `/metrics` endpoints |
-| `forwarder-otlphttp` | yes | OTLP HTTP metrics push |
-| `log-source-journald-systemd` | yes | Tail the systemd journal (requires `libsystemd`) |
-| `log-sink-loki` | yes | Push log batches to Grafana Loki |
-
-Build a minimal metrics-only binary:
+Validate and run:
 
 ```sh
-cargo build --release --no-default-features \
-    --features collector-unix,forwarder-otlphttp
+ferrometer validate -c /etc/ferrometer/config.toml
+ferrometer run -c /etc/ferrometer/config.toml
+ferrometer run -c /etc/ferrometer/config.toml -vv     # debug logging
 ```
 
-## Component taxonomy
+If installed from a package, just `systemctl enable --now ferrometer`.
 
-| Term | Direction | Description |
-|------|-----------|-------------|
-| **Collector** | in | Gathers data locally (system metrics, logs) |
-| **Scraper** | in | Pulls data from remote endpoints |
-| **Processor** | through | Transforms, filters, relabels data |
-| **Forwarder** | out | Pushes data to remote destinations |
+## Configuration
 
-## Metrics
+[examples/config.toml](examples/config.toml) is the full reference. The sections below cover the parts most users care about; every field shown is optional unless noted.
 
-Metric names follow [node_exporter](https://github.com/prometheus/node_exporter) conventions for compatibility with existing dashboards:
+### Metrics
 
-- `node_cpu_seconds_total` (counter, labels: cpu, mode)
-- `node_memory_MemTotal_bytes`, `node_memory_MemFree_bytes`, ... (gauge)
-- `node_disk_reads_completed_total`, `node_disk_read_bytes_total`, ... (counter, label: device)
-- `node_filesystem_size_bytes`, `node_filesystem_free_bytes`, ... (gauge, labels: device, mountpoint, fstype)
-- `node_network_receive_bytes_total`, `node_network_transmit_bytes_total`, ... (counter, label: device)
-- `node_load1`, `node_load5`, `node_load15` (gauge)
-- `node_uname_info` (gauge=1, labels: sysname, release, version, machine, nodename)
+#### Unix collector
 
-## Logs
+```toml
+[metrics.collectors.system]
+type = "unix"
+interval = "15s"
+disk-devices = "^(nvme\\d+n\\d+|sd[a-z]+|vd[a-z]+)$"   # regex filter
+net-devices = "^(eth|en|wl|bond)"
+collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
+```
 
-With the default feature set, ferrometer can tail the systemd journal and push entries to Grafana Loki. Each `[logs.shippers.<name>]` entry in the config pairs one source with one sink. Restarts resume from the last acked position without gaps, and there is no in-memory buffer — journald itself is the durable buffer during a Loki outage.
+Metric names follow [node_exporter](https://github.com/prometheus/node_exporter) conventions for dashboard compatibility:
 
-See [examples/config.toml](examples/config.toml) for the full logs configuration.
+| Sub-collector | Metrics |
+|---------------|---------|
+| `cpu` | `node_cpu_seconds_total` (counter, labels: `cpu`, `mode`); `node_cpu_scaling_frequency_hertz`, `node_cpu_frequency_min_hertz`, `node_cpu_frequency_max_hertz` (gauge, label: `cpu`); `node_cpu_scaling_governor` (gauge=1, labels: `cpu`, `governor`); `node_cpu_core_throttles_total` (counter, labels: `cpu`, `package`); `node_cpu_package_throttles_total` (counter, label: `package`) |
+| `memory` | `node_memory_MemTotal_bytes`, `node_memory_MemFree_bytes`, `node_memory_MemAvailable_bytes`, ... (gauge) |
+| `disk` | `node_disk_reads_completed_total`, `node_disk_read_bytes_total`, `node_disk_writes_completed_total`, `node_disk_written_bytes_total`, `node_disk_io_time_seconds_total`, `node_disk_discards_completed_total`, `node_disk_flush_requests_total`, ... (counter, label: `device`) |
+| `filesystem` | `node_filesystem_size_bytes`, `node_filesystem_free_bytes`, `node_filesystem_avail_bytes`, `node_filesystem_files`, `node_filesystem_files_free` (gauge, labels: `device`, `mountpoint`, `fstype`) |
+| `netdev` | `node_network_receive_bytes_total`, `node_network_transmit_bytes_total`, `node_network_receive_packets_total`, ... (counter, label: `device`) |
+| `loadavg` | `node_load1`, `node_load5`, `node_load15` (gauge) |
+| `uname` | `node_uname_info` (gauge=1, labels: `sysname`, `release`, `version`, `machine`, `nodename`) |
+
+#### Prometheus scraper
+
+Pulls a text-exposition endpoint on an interval. Counter / Gauge / Untyped samples are forwarded as-is; Histogram and Summary samples are dropped (ferrometer's internal model is currently Counter/Gauge only).
+
+```toml
+[metrics.collectors.haproxy]
+type = "prometheus"
+url = "http://127.0.0.1:9021/metrics"
+interval = "15s"
+
+[metrics.collectors.haproxy.static-labels]
+job = "haproxy"
+```
+
+### Logs
+
+Each `[logs.shippers.<name>]` entry pairs one source with one sink. The journald source seeks to the last acked cursor on start, so restarts don't lose or duplicate entries.
+
+```toml
+[logs.shippers.journal]
+
+[logs.shippers.journal.source]
+type = "journald"
+
+[logs.shippers.journal.source.static-labels]
+job = "ferrometer"
+
+[logs.shippers.journal.sink]
+type = "loki"
+endpoint = "http://loki.example.com:3100"
+```
+
+Stream labels (low cardinality, become Loki streams) and structured metadata (per-entry, queryable, no new streams) can both be sourced from journal fields:
+
+```toml
+[logs.shippers.journal.source.labels]
+unit = "_SYSTEMD_UNIT"
+priority = "PRIORITY"
+
+[logs.shippers.journal.source.metadata]
+hostname = "_HOSTNAME"
+pid = "_PID"
+container = "CONTAINER_NAME"
+```
+
+### Authentication
+
+Pick one method per HTTP backend (OTLP forwarder, Loki sink, Prometheus scraper):
+
+```toml
+# Basic auth
+username = "myhost"
+password-file = "${env:CREDENTIALS_DIRECTORY}/otlp-password"
+
+# Bearer token
+bearer-token-file = "${env:CREDENTIALS_DIRECTORY}/otlp-token"
+
+# Arbitrary Authorization header (escape hatch)
+authorization = "Bearer ${env:OTLP_TOKEN}"
+```
+
+Both `password` / `password-file` and `bearer-token` / `bearer-token-file` accept the credential inline as a string (typically with `${env:VAR}`) or loaded from a file.
+
+### TLS
+
+mTLS and a custom trust root, on any HTTP backend. Composes with any auth method:
+
+```toml
+client-cert-file = "/etc/ferrometer/client.pem"
+client-key-file = "${env:CREDENTIALS_DIRECTORY}/client.key"
+ca-cert-file = "/etc/ferrometer/internal-ca.pem"
+```
+
+`client-key-file` is optional — if omitted, the key is read from `client-cert-file` (bundled-PEM form). `ca-cert-file` alone is valid for trusting a private CA on the server cert without doing mTLS.
+
+### OTLP resource attributes
+
+Distinct from per-metric labels: these go on the OTLP `Resource` message and carry semantic-convention identifiers. Useful for receivers that distinguish resource-level identity from per-metric dimensions.
+
+```toml
+[metrics.forwarders.victoriametrics.resource-attributes]
+"service.instance.id" = "${instance.name}"
+"service.name" = "ferrometer"
+"service.version" = "${version}"
+```
+
+### Placeholders
+
+Every string-valued config field accepts:
+
+| Placeholder | Resolves to |
+|-------------|-------------|
+| `${instance.name}` | `[instance].name` from this file |
+| `${version}` | ferrometer's own version |
+| `${env:VAR}` | the value of environment variable `VAR` |
+
+Unset env vars and unknown placeholders fail at config load with a clear message — never silent expansion to empty. `ferrometer validate` skips placeholder resolution so the config can be checked from a shell without the service's runtime environment.
 
 ## Running under systemd
 
-The bundled `ferrometer.service` unit runs as a transient user inside a locked-down sandbox, so no setup beyond the package install is required.
+The bundled `ferrometer.service` runs as a transient user inside a locked-down sandbox (full hardening profile, see the unit file). No setup beyond the package install is required for the default config to come up.
 
-### Providing passwords via systemd credentials
+### Providing secrets via systemd credentials
 
-Each backend (OTLP, Loki, Prometheus scrapes) can authenticate with a password read from a file. The recommended way to manage that file is through systemd encrypted credentials — they are encrypted at rest in `/etc/credstore.encrypted/` and decrypted into a tmpfs at `/run/credentials/ferrometer/<name>` only for the duration of the service.
+The recommended way to manage passwords, bearer tokens, and TLS keys: encrypt them at rest in `/etc/credstore.encrypted/` and let systemd decrypt them into a per-service tmpfs (`/run/credentials/ferrometer.service/`) only for the lifetime of the service.
 
-Encrypt a password and store it at rest:
+Encrypt and store:
 
 ```sh
 install -d -m 0700 /etc/credstore.encrypted
 systemd-creds encrypt - /etc/credstore.encrypted/ferrometer-otlp-password
 ```
 
-Teach the unit to load that credential at start with a drop-in override (do not edit the shipped unit; drop-ins survive package upgrades):
+Wire it into the service via a drop-in (do not edit the shipped unit; drop-ins survive package upgrades):
 
 ```sh
 systemctl edit ferrometer.service
@@ -142,25 +217,38 @@ systemctl edit ferrometer.service
 LoadCredentialEncrypted=otlp-password:/etc/credstore.encrypted/ferrometer-otlp-password
 ```
 
-Then point `password-file` in `config.toml` at the decrypted path. The `${env:CREDENTIALS_DIRECTORY}` placeholder expands to systemd's per-service credentials directory, so the config stays portable:
+Reference the decrypted path from the config using the placeholder, which expands to systemd's per-service credentials directory and keeps the config portable:
 
 ```toml
 password-file = "${env:CREDENTIALS_DIRECTORY}/otlp-password"
 ```
 
-Repeat for any additional secrets (e.g. `loki-password`).
+Repeat for additional secrets (Loki password, bearer tokens, mTLS keys, etc.).
 
-### Placeholders in config values
+## Building from source
 
-String values in `config.toml` may reference:
+```sh
+cargo build --release
+```
 
-| Placeholder | Resolves to |
-|-------------|-------------|
-| `${instance.name}` | `[instance].name` from this file |
-| `${version}` | ferrometer's own version |
-| `${env:VAR}` | the value of environment variable `VAR` |
+Requires Rust 1.85+, `protoc`, `pkg-config`, and the libsystemd development headers (`libsystemd-dev` on Debian/Ubuntu, included in `systemd-libs` on Arch).
 
-Unrecognised placeholders and unset env vars fail at config load with a clear message, rather than silently expanding to empty. `ferrometer validate` skips placeholder resolution so the config can be checked from a shell without the service's runtime env vars in scope.
+### Feature flags
+
+All five components are enabled by default. Disabling features mainly matters when you want to drop the libsystemd link — useful for minimal containers or systems without systemd:
+
+```sh
+cargo build --release --no-default-features \
+    --features collector-unix,collector-prometheus,forwarder-otlphttp
+```
+
+| Feature | Default | Notes |
+|---------|---------|-------|
+| `collector-unix` | yes | Reads `/proc` and `/sys`. No external dependency. |
+| `collector-prometheus` | yes | Pulls remote `/metrics` endpoints. |
+| `forwarder-otlphttp` | yes | OTLP HTTP push. |
+| `log-source-journald-systemd` | yes | Tails the systemd journal. **Requires libsystemd at runtime.** |
+| `log-sink-loki` | yes | Pushes to Grafana Loki. |
 
 ## License
 

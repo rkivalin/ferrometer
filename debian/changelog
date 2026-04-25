@@ -1,10 +1,20 @@
 ferrometer (0.1.0-1) unstable; urgency=low
 
   * Initial release.
-  * Unix system metrics collector (CPU, memory, disk, filesystem, network, load, uname)
-  * OTLP HTTP forwarder with gzip compression and basic auth
-  * Feature-flagged components for minimal binary size
-  * TOML configuration
-  * Systemd service unit
+  * Collectors: Unix system metrics (CPU + frequency/governor/throttle,
+    memory, disk incl. discards/flushes, filesystem, network, load average,
+    uname); Prometheus scraper for any text-exposition /metrics endpoint.
+  * Log shipping: systemd journal source with persisted cursor, Loki sink
+    speaking the native protobuf + snappy push API. Per-shipper exponential
+    backoff. journald itself is the durable buffer during a sink outage.
+  * Forwarders: OTLP HTTP push with gzip compression, in-memory ring buffer,
+    exponential backoff, configurable OTLP Resource attributes.
+  * Auth: basic / bearer / arbitrary Authorization header on every HTTP
+    client. Secrets via env vars, files, or systemd encrypted credentials.
+  * mTLS with optional custom CA bundle on every HTTP client.
+  * TOML configuration with ${instance.name} / ${version} / ${env:VAR}
+    placeholder expansion and load-time validation.
+  * Hardened systemd service unit running under a transient DynamicUser
+    inside a locked-down sandbox.
 
- -- Roman Kivalin <roman@shl.dev>  Tue, 22 Apr 2026 00:00:00 +0000
+ -- Roman Kivalin <roman@shl.dev>  Sat, 25 Apr 2026 00:00:00 +0000

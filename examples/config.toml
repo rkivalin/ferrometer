@@ -1,6 +1,6 @@
-# Ferrometer configuration
+# Ferrometer configuration reference.
 #
-# All durations use suffix notation: "15s", "5m", "1h"
+# All durations use suffix notation: "15s", "5m", "1h".
 #
 # String values may contain placeholders, resolved at config load time:
 #   ${instance.name}    — [instance].name from this file
@@ -8,151 +8,136 @@
 #   ${env:VAR}          — environment variable (unset → hard error)
 #
 # Under the shipped systemd unit, systemd sets STATE_DIRECTORY and (when
-# LoadCredentialEncrypted= is configured) CREDENTIALS_DIRECTORY, which is
-# why the examples below reference them.
+# LoadCredentialEncrypted= is configured) CREDENTIALS_DIRECTORY, which the
+# examples below reference via ${env:...}.
 
 [instance]
-# Unique name for this host. Added as "instance" label to all metrics.
+# Unique name for this host. Use it in resource attributes / static labels;
+# nothing is auto-injected.
 name = "myhost"
 
-# Metrics pipeline: collectors gather data, forwarders push it out.
-# Multiple collectors and forwarders can be configured.
+
+# ----------------------------------------------------------------------------
+# Metrics: collectors gather data, forwarders push it out. Multiple of each
+# can be configured.
+# ----------------------------------------------------------------------------
 
 [metrics.collectors.system]
 type = "unix"
-
-# Collection interval (default: "15s")
+# Collection interval (default: "15s").
 interval = "15s"
-
-# Hard deadline for a single collect() call. The scheduler aborts the task
-# if it exceeds this; /proc reads are effectively instant, so the default
-# leaves headroom for statvfs on stale network mounts. (default: "5s")
+# Hard deadline per collect() call. /proc reads are effectively instant; the
+# default leaves headroom for statvfs on stale network mounts. (default: "5s")
 max-runtime = "5s"
-
-# Regex filter for disk devices to monitor (default: common block devices)
-# Only devices matching this pattern will be reported.
+# Regex filter for disk devices. Only matching devices are reported.
 disk-devices = "^(nvme\\d+n\\d+|sd[a-z]+|vd[a-z]+)$"
-
-# Regex filter for network interfaces to monitor
+# Regex filter for network interfaces.
 net-devices = "^(eth|en|wl|bond)"
-
-# Sub-collectors to enable (default: all)
-# Available: cpu, memory, disk, filesystem, netdev, loadavg, uname
+# Sub-collectors to enable (default: all).
 collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
 
-# Static labels added to every emitted metric. Nothing is auto-injected;
-# to carry an `instance`-like identifier prefer the forwarder's
-# resource-attributes (OTel semantic convention).
+# Static labels added to every emitted metric.
 # [metrics.collectors.system.static-labels]
 # role = "edge"
 
+
 # Prometheus scraper — pulls a text-exposition /metrics endpoint on an
-# interval. Counter, Gauge, and Untyped samples are forwarded; Histogram
-# and Summary are dropped with a debug log (ferrometer's internal metric
-# model is currently Gauge/Counter only). Scrape failures log a warning
-# and emit no metrics for that tick (no stale last-seen emission).
+# interval. Counter / Gauge / Untyped samples are forwarded; Histogram and
+# Summary are dropped with a debug log. Scrape failures emit no metrics for
+# that tick (no stale last-seen emission).
+#
 # [metrics.collectors.haproxy]
 # type = "prometheus"
 # url = "http://127.0.0.1:9021/metrics"
 # interval = "15s"
-# scrape-timeout = "10s"         # HTTP request timeout (default: "10s")
-# max-runtime = "15s"            # Scheduler hard deadline; must be >= scrape-timeout (default: "15s")
-# # Optional basic auth:
-# # username = "scraper"
-# # password-file = "${env:CREDENTIALS_DIRECTORY}/haproxy-password"
+# scrape-timeout = "10s"
+# max-runtime = "15s"
 #
-# # Static labels merged into every scraped metric. `instance` is
-# # auto-injected from [instance.name] and does not need listing here.
+# Auth (optional). See the forwarder section below for the full set of
+# auth and TLS options — they apply to every HTTP client.
+# username = "scraper"
+# password-file = "${env:CREDENTIALS_DIRECTORY}/haproxy-password"
+#
+# Static labels merged into every scraped sample.
 # [metrics.collectors.haproxy.static-labels]
 # job = "haproxy"
+
 
 # OTLP HTTP forwarder — pushes metrics to any OTLP/HTTP backend
 # (VictoriaMetrics, Grafana Mimir, etc.). "/v1/metrics" is appended to the
 # endpoint automatically if not present.
+#
 # [metrics.forwarders.victoriametrics]
 # type = "otlphttp"
 # endpoint = "http://metrics.example.com:8428/opentelemetry"
 #
-# # Auth (optional). Pick one method:
-# #   • Basic:  username + (password OR password-file)
-# #   • Bearer: bearer-token OR bearer-token-file
-# #   • Custom: authorization (full Authorization header value)
-# # See README.md for wiring up secrets via systemd encrypted credentials
-# # (LoadCredentialEncrypted=). Any string field accepts ${env:VAR}.
+# Auth (pick one):
+#   Basic:  username + (password OR password-file)
+#   Bearer: bearer-token OR bearer-token-file
+#   Custom: authorization (full Authorization header value)
 # username = "ferrometer"
 # password-file = "${env:CREDENTIALS_DIRECTORY}/otlp-password"
-# # bearer-token = "${env:OTLP_TOKEN}"
-# # authorization = "Bearer ${env:OTLP_TOKEN}"
+# bearer-token-file = "${env:CREDENTIALS_DIRECTORY}/otlp-token"
+# authorization = "Bearer ${env:OTLP_TOKEN}"
 #
-# # mTLS / custom CA (optional, orthogonal to auth above):
-# #   client-cert-file       — PEM client certificate (chain). May contain
-# #                            the private key too, in which case
-# #                            client-key-file can be omitted.
-# #   client-key-file        — PEM private key (separate file). Optional.
-# #   ca-cert-file           — PEM CA bundle to add to the trust store.
-# #                            Use alone for server-cert pinning; combine
-# #                            with client-cert/key for full mTLS.
-# # client-cert-file = "/etc/ferrometer/client.pem"
-# # client-key-file = "${env:CREDENTIALS_DIRECTORY}/client.key"
-# # ca-cert-file = "/etc/ferrometer/internal-ca.pem"
+# mTLS / custom CA (orthogonal to auth above). All three fields are optional;
+# ca-cert-file alone gives you private-CA validation without mTLS, and
+# client-key-file may be omitted if the key lives in client-cert-file.
+# client-cert-file = "/etc/ferrometer/client.pem"
+# client-key-file = "${env:CREDENTIALS_DIRECTORY}/client.key"
+# ca-cert-file = "/etc/ferrometer/internal-ca.pem"
 #
-# # Optional tuning (shown with defaults):
+# Optional tuning (shown with defaults):
 # compression = "gzip"            # "gzip" or "none"
 # timeout = "30s"                 # HTTP request timeout
-# buffer-max-metrics = 100000     # ring buffer cap; oldest batches drop on overflow.
-#                                 # ~20 MB worst case, covers a ~2 hour outage at typical rates.
-# request-max-metrics = 10000     # upper bound on metrics merged into a single OTLP request
+# buffer-max-metrics = 100000     # ring buffer cap; oldest batches drop on
+#                                 # overflow. ~20 MB worst case, ~2 hour outage.
+# request-max-metrics = 10000     # cap on metrics merged into a single OTLP request
 # backoff-initial = "1s"          # exponential backoff for failed deliveries;
 # backoff-max = "5m"              # doubles per consecutive failure up to backoff-max.
 #
-# # Attributes attached to the OTLP Resource message (separate from per-metric
-# # labels). Useful for OTel semantic-convention compatibility with receivers
-# # that distinguish Resource-level identifiers from per-metric dimensions.
-# # Supported placeholders in values:
-# #   ${instance.name}  →  the top-level [instance].name
-# #   ${version}        →  ferrometer's own version (e.g. "0.1.0")
+# Attributes attached to the OTLP Resource message (separate from per-metric
+# labels). Useful for OTel semantic-convention compatibility with receivers
+# that distinguish Resource-level identifiers from per-metric dimensions.
 # [metrics.forwarders.victoriametrics.resource-attributes]
 # "service.instance.id" = "${instance.name}"
 # "service.name" = "ferrometer"
 # "service.version" = "${version}"
 
-# ---------------------------------------------------------------------------
-# Logs. Each entry in [logs.shippers] pairs one source with one sink.
-# Journald source + Loki sink are compiled in by default; other source/sink
-# combinations require their matching feature flag (see README.md).
-# The systemd journal is tailed from the saved cursor (or tail on first run)
-# and shipped to Loki. No in-memory ring buffer — journald is the durable
-# buffer; during a sink outage memory stays flat.
-# ---------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# Logs: each [logs.shippers.<name>] entry pairs one source with one sink.
+# The journald source seeks to the last acked cursor on start, so restarts
+# don't lose or duplicate entries. journald itself is the durable buffer
+# during a sink outage — there is no in-memory queue.
+# ----------------------------------------------------------------------------
 
 # [logs.shippers.journal]
-# # Exponential backoff for failed ships; doubles per consecutive failure
-# # up to backoff-max, resets on success.
+# Exponential backoff for failed ships; doubles per consecutive failure up
+# to backoff-max, resets on success.
 # backoff-initial = "1s"
 # backoff-max = "5m"
 #
 # [logs.shippers.journal.source]
 # type = "journald"
-# # Optional tuning (shown with defaults):
+# Optional tuning (shown with defaults):
 # batch-size = 1000
 # batch-wait = "5s"
 # cursor-file = "${env:STATE_DIRECTORY}/journal.cursor"
-# runtime-only = false       # true = only /run/log/journal (volatile)
+# runtime-only = false       # true → only /run/log/journal (volatile)
 #
-# # label_name = journal_field. Entries missing the source field don't
-# # get the label. Stream labels should stay low cardinality — each
-# # unique combination of label values opens a new Loki stream.
+# Stream labels: low-cardinality fields that group entries into Loki streams.
+# label_name = journal_field. Entries missing the source field don't get
+# the label.
 # [logs.shippers.journal.source.labels]
 # unit = "_SYSTEMD_UNIT"
 # priority = "PRIORITY"
 #
-# # Static labels added to every entry. "instance" is auto-injected from
-# # [instance.name] and does not need to be listed here.
+# Static labels added to every entry.
 # [logs.shippers.journal.source.static-labels]
 # job = "ferrometer"
 #
-# # metadata_name = journal_field. Per-entry, queryable, does not create
-# # new streams.
+# Per-entry structured metadata: queryable, does not create new streams.
 # [logs.shippers.journal.source.metadata]
 # pid = "_PID"
 # syslog_identifier = "SYSLOG_IDENTIFIER"
@@ -162,9 +147,11 @@ collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname
 # boot_id = "_BOOT_ID"
 # machine_id = "_MACHINE_ID"
 # cmdline = "_CMDLINE"
+# container = "CONTAINER_NAME"
 #
 # [logs.shippers.journal.sink]
 # type = "loki"
 # endpoint = "http://loki.example.com:3100"
+# All auth and TLS options listed above for the OTLP forwarder apply here too.
 # username = "ferrometer"
 # password-file = "${env:CREDENTIALS_DIRECTORY}/loki-password"
