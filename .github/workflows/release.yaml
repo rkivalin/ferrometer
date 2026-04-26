@@ -91,7 +91,7 @@ jobs:
           Version: ${VERSION}-1
           Architecture: ${{ matrix.arch }}
           Maintainer: Roman Kivalin <roman@shl.dev>
-          Depends: systemd
+          Depends: systemd, init-system-helpers (>= 1.54~)
           Section: admin
           Priority: optional
           Description: Lightweight telemetry collector
@@ -99,6 +99,69 @@ jobs:
           CTRL
 
           echo "/etc/ferrometer/config.toml" >"$PKG/DEBIAN/conffiles"
+
+          # Maintainer scripts mirroring what dh_installsystemd would generate:
+          # daemon-reload + enable + start (or restart on upgrade) on install,
+          # stop on remove, mask on remove, purge state on purge. The hand-
+          # rolled .deb skips dh, so we emit these explicitly.
+          cat >"$PKG/DEBIAN/postinst" <<'POSTINST'
+          #!/bin/sh
+          set -e
+
+          if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+              deb-systemd-helper unmask 'ferrometer.service' >/dev/null || true
+              if deb-systemd-helper --quiet was-enabled 'ferrometer.service'; then
+                  deb-systemd-helper enable 'ferrometer.service' >/dev/null || true
+              else
+                  deb-systemd-helper update-state 'ferrometer.service' >/dev/null || true
+              fi
+          fi
+
+          if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+              if [ -d /run/systemd/system ]; then
+                  systemctl --system daemon-reload >/dev/null || true
+                  if [ -n "$2" ]; then
+                      _dh_action=restart
+                  else
+                      _dh_action=start
+                  fi
+                  deb-systemd-invoke $_dh_action 'ferrometer.service' >/dev/null || true
+              fi
+          fi
+          POSTINST
+
+          cat >"$PKG/DEBIAN/prerm" <<'PRERM'
+          #!/bin/sh
+          set -e
+
+          if [ -d /run/systemd/system ] && [ "$1" = remove ]; then
+              deb-systemd-invoke stop 'ferrometer.service' >/dev/null || true
+          fi
+          PRERM
+
+          cat >"$PKG/DEBIAN/postrm" <<'POSTRM'
+          #!/bin/sh
+          set -e
+
+          if [ -d /run/systemd/system ]; then
+              systemctl --system daemon-reload >/dev/null || true
+          fi
+
+          if [ "$1" = "remove" ]; then
+              if [ -x "/usr/bin/deb-systemd-helper" ]; then
+                  deb-systemd-helper mask 'ferrometer.service' >/dev/null || true
+              fi
+          fi
+
+          if [ "$1" = "purge" ]; then
+              if [ -x "/usr/bin/deb-systemd-helper" ]; then
+                  deb-systemd-helper purge 'ferrometer.service' >/dev/null || true
+                  deb-systemd-helper unmask 'ferrometer.service' >/dev/null || true
+              fi
+          fi
+          POSTRM
+
+          chmod 0755 "$PKG/DEBIAN/postinst" "$PKG/DEBIAN/prerm" "$PKG/DEBIAN/postrm"
 
           dpkg-deb --build --root-owner-group "$PKG"
 
