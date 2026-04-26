@@ -1,8 +1,11 @@
 ferrometer (0.2.0-1) unstable; urgency=low
 
-  * No changes
+  * Logs auto-format for journald when stderr is hooked to it: timestamps
+    dropped (journald has its own), ANSI colors dropped, syslog `<N>`
+    priority prefix per line so journald assigns the right PRIORITY field.
+    Otherwise the human-friendly format is unchanged.
 
- -- Roman Kivalin <roman@shl.dev>  Sat, 25 Apr 2026 00:00:00 +0000
+ -- Roman Kivalin <roman@shl.dev>  Sun, 26 Apr 2026 00:00:00 +0000
 
 ferrometer (0.1.0-1) unstable; urgency=low
 

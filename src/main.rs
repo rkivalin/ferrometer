@@ -15,6 +15,7 @@ mod collector;
 mod config;
 mod error;
 mod forwarder;
+mod journal_log;
 #[cfg(all(feature = "log-source-journald-systemd", feature = "log-sink-loki"))]
 mod log;
 mod pipeline;
@@ -50,11 +51,19 @@ async fn main() -> anyhow::Result<()> {
         2 => "ferrometer=trace",
         _ => "trace",
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter)),
-        )
-        .init();
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
+    if journal_log::under_journald() {
+        // stderr goes to the journal — drop our timestamps + colors and let
+        // journald see priorities via the syslog `<N>` prefix.
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_ansi(false)
+            .event_format(journal_log::JournalFormat)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    }
 
     match cli.command {
         Command::Run => {
