@@ -5,6 +5,7 @@
 ### Features
 
 - Logs auto-format for journald when stderr is hooked to it (detected via the `JOURNAL_STREAM` env var systemd sets): timestamps dropped (journald has its own), ANSI colors dropped, syslog `<N>` priority prefix per line so journald assigns the right `PRIORITY` per entry. The human-friendly format is unchanged for foreground / piped runs.
+- Unix collector emits `node_memory_Dirty_bytes`.
 
 ### Fixes
 

@@ -15,6 +15,7 @@ pub fn collect(cache: &mut LabelCache) -> Result<Vec<Metric>> {
         ("node_memory_MemAvailable_bytes", info.mem_available),
         ("node_memory_Buffers_bytes", Some(info.buffers)),
         ("node_memory_Cached_bytes", Some(info.cached)),
+        ("node_memory_Dirty_bytes", Some(info.dirty)),
         ("node_memory_SwapTotal_bytes", Some(info.swap_total)),
         ("node_memory_SwapFree_bytes", Some(info.swap_free)),
         ("node_memory_SwapCached_bytes", Some(info.swap_cached)),
