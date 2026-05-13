@@ -1,3 +1,9 @@
+ferrometer (0.4.0-1) unstable; urgency=low
+
+  * No changes
+
+ -- Roman Kivalin <roman@shl.dev>  Wed, 13 May 2026 00:00:00 +0000
+
 ferrometer (0.3.0-1) unstable; urgency=low
 
   * Filesystem collector dedupes bind mounts: by default only one entry per
@@ -10,7 +16,7 @@ ferrometer (0.3.0-1) unstable; urgency=low
     /etc/ssl/certs are picked up automatically; `ca-cert-file` still adds
     a private CA on top.
 
- -- Roman Kivalin <roman@shl.dev>  Sun, 26 Apr 2026 00:00:00 +0000
+ -- Roman Kivalin <roman@shl.dev>  Wed, 13 May 2026 00:00:00 +0000
 
 ferrometer (0.2.0-1) unstable; urgency=low
 
