@@ -10,6 +10,8 @@
 
 ### Changes
 
+- HTTP clients now validate server certificates against the OS trust store (via `rustls-platform-verifier`) instead of a baked-in Mozilla CA bundle. Admin-installed CAs in `/etc/ssl/certs` (or equivalent) are picked up automatically; the `ca-cert-file` config option continues to add a private CA on top. Drops the obsolete `webpki-roots` feature from the reqwest dependency.
+
 ## 0.2.0 (2026-04-26)
 
 ### Features

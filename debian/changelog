@@ -5,6 +5,10 @@ ferrometer (0.3.0-1) unstable; urgency=low
     `filesystem-mount-points` / `filesystem-fs-types` include-regex options
     narrow further; `filesystem-dedupe-devices = false` restores previous
     behavior. Switches from /proc/mounts to /proc/self/mountinfo.
+  * HTTP clients now validate server certificates against the OS trust store
+    instead of a baked-in Mozilla CA bundle. Admin-installed CAs in
+    /etc/ssl/certs are picked up automatically; `ca-cert-file` still adds
+    a private CA on top.
 
  -- Roman Kivalin <roman@shl.dev>  Sun, 26 Apr 2026 00:00:00 +0000
 
