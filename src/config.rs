@@ -358,6 +358,18 @@ pub struct UnixCollectorConfig {
     pub disk_devices: String,
     #[serde(default = "default_net_devices")]
     pub net_devices: String,
+    /// Include-regex over mountpoints. Empty (the default) matches all;
+    /// applied on top of the hardcoded pseudo-fs floor.
+    #[serde(default)]
+    pub filesystem_mount_points: String,
+    /// Include-regex over filesystem types. Empty (the default) matches all;
+    /// applied on top of the hardcoded pseudo-fs floor.
+    #[serde(default)]
+    pub filesystem_fs_types: String,
+    /// Collapse bind mounts / multiple mountpoints sharing one block device
+    /// down to a single canonical entry. Default true.
+    #[serde(default = "default_true")]
+    pub filesystem_dedupe_devices: bool,
     #[serde(default = "default_unix_collectors")]
     pub collectors: Vec<String>,
     /// Static labels added to every emitted metric. Nothing is auto-injected;
@@ -369,6 +381,10 @@ pub struct UnixCollectorConfig {
 
 fn default_unix_max_runtime() -> Duration {
     Duration::from_secs(5)
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -621,6 +637,16 @@ impl Config {
             })?;
             regex::Regex::new(&config.net_devices).map_err(|e| {
                 Error::Config(format!("collector {name}: invalid net-devices regex: {e}"))
+            })?;
+            regex::Regex::new(&config.filesystem_mount_points).map_err(|e| {
+                Error::Config(format!(
+                    "collector {name}: invalid filesystem-mount-points regex: {e}"
+                ))
+            })?;
+            regex::Regex::new(&config.filesystem_fs_types).map_err(|e| {
+                Error::Config(format!(
+                    "collector {name}: invalid filesystem-fs-types regex: {e}"
+                ))
             })?;
         }
         #[cfg(not(feature = "collector-unix"))]

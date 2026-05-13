@@ -1,6 +1,10 @@
 ferrometer (0.3.0-1) unstable; urgency=low
 
-  * No changes
+  * Filesystem collector dedupes bind mounts: by default only one entry per
+    block device is reported (root="/" wins, ties broken by mountpoint). New
+    `filesystem-mount-points` / `filesystem-fs-types` include-regex options
+    narrow further; `filesystem-dedupe-devices = false` restores previous
+    behavior. Switches from /proc/mounts to /proc/self/mountinfo.
 
  -- Roman Kivalin <roman@shl.dev>  Sun, 26 Apr 2026 00:00:00 +0000
 

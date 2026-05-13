@@ -4,6 +4,8 @@
 
 ### Features
 
+- Filesystem collector dedupes bind mounts: by default only one entry per block device is reported (the one whose mount root is `/`, tie-broken by lexicographic mountpoint). New `filesystem-mount-points` and `filesystem-fs-types` include-regex options narrow further on top of the hardcoded pseudo-fs floor; `filesystem-dedupe-devices = false` restores the previous one-entry-per-mountpoint behavior. Reads `/proc/self/mountinfo` instead of `/proc/mounts`.
+
 ### Fixes
 
 ### Changes

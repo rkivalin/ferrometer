@@ -78,8 +78,13 @@ type = "unix"
 interval = "15s"
 disk-devices = "^(nvme\\d+n\\d+|sd[a-z]+|vd[a-z]+)$"   # regex filter
 net-devices = "^(eth|en|wl|bond)"
+filesystem-mount-points = ""                            # include-regex, empty = all
+filesystem-fs-types = ""                                # include-regex, empty = all
+filesystem-dedupe-devices = true                        # collapse bind mounts
 collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
 ```
+
+Bind mounts and other multi-mount setups produce one entry per mountpoint in `/proc/self/mountinfo`. With `filesystem-dedupe-devices` on (default), only one entry per block device is reported — the entry whose `root` is `/` wins, with lexicographic mountpoint as a tie-breaker. A hardcoded floor always skips pseudo-filesystems (`proc`, `sysfs`, `tmpfs`, `cgroup`, ...) before any user filter applies.
 
 Metric names follow [node_exporter](https://github.com/prometheus/node_exporter) conventions for dashboard compatibility:
 

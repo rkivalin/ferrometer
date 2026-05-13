@@ -21,6 +21,9 @@ pub struct UnixCollector {
     enabled: Vec<String>,
     disk_filter: Regex,
     net_filter: Regex,
+    fs_mount_filter: Regex,
+    fs_type_filter: Regex,
+    fs_dedupe_devices: bool,
     cache: LabelCache,
 }
 
@@ -38,6 +41,17 @@ impl UnixCollector {
             net_filter: Regex::new(&config.net_devices).map_err(|e| {
                 crate::error::Error::Config(format!("invalid net-devices regex: {e}"))
             })?,
+            fs_mount_filter: Regex::new(&config.filesystem_mount_points).map_err(|e| {
+                crate::error::Error::Config(format!(
+                    "invalid filesystem-mount-points regex: {e}"
+                ))
+            })?,
+            fs_type_filter: Regex::new(&config.filesystem_fs_types).map_err(|e| {
+                crate::error::Error::Config(format!(
+                    "invalid filesystem-fs-types regex: {e}"
+                ))
+            })?,
+            fs_dedupe_devices: config.filesystem_dedupe_devices,
             cache: LabelCache::new(base),
         })
     }
@@ -52,7 +66,15 @@ impl Collector for UnixCollector {
                 "cpu" => cpu::collect(&mut self.cache)?,
                 "memory" => memory::collect(&mut self.cache)?,
                 "disk" => disk::collect(&mut self.cache, &self.disk_filter)?,
-                "filesystem" => filesystem::collect(&mut self.cache).await?,
+                "filesystem" => {
+                    filesystem::collect(
+                        &mut self.cache,
+                        &self.fs_mount_filter,
+                        &self.fs_type_filter,
+                        self.fs_dedupe_devices,
+                    )
+                    .await?
+                }
                 "netdev" => netdev::collect(&mut self.cache, &self.net_filter)?,
                 "loadavg" => loadavg::collect(&mut self.cache)?,
                 "uname" => uname::collect(&mut self.cache)?,

@@ -33,6 +33,12 @@ max-runtime = "5s"
 disk-devices = "^(nvme\\d+n\\d+|sd[a-z]+|vd[a-z]+)$"
 # Regex filter for network interfaces.
 net-devices = "^(eth|en|wl|bond)"
+# Filesystem mountpoint include-regex. Empty (default) matches all.
+filesystem-mount-points = ""
+# Filesystem-type include-regex. Empty (default) matches all.
+filesystem-fs-types = ""
+# Collapse mounts that share a block device down to one canonical entry.
+filesystem-dedupe-devices = true
 # Sub-collectors to enable (default: all).
 collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
 
