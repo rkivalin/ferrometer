@@ -1,3 +1,9 @@
+ferrometer (0.5.0-1) unstable; urgency=low
+
+  * No changes
+
+ -- Roman Kivalin <roman@shl.dev>  Wed, 19 Aug 2026 00:00:00 +0000
+
 ferrometer (0.4.0-1) unstable; urgency=low
 
   * Prometheus scraper emits `up` (1/0), `scrape_duration_seconds` and
@@ -23,7 +29,7 @@ ferrometer (0.4.0-1) unstable; urgency=low
     rejection at error level and acks the batch.
   * Loki error bodies are trimmed before logging (no more two-line warnings).
 
- -- Roman Kivalin <roman@shl.dev>  Wed, 13 May 2026 00:00:00 +0000
+ -- Roman Kivalin <roman@shl.dev>  Wed, 19 Aug 2026 00:00:00 +0000
 
 ferrometer (0.3.0-1) unstable; urgency=low
 
