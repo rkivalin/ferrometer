@@ -6,7 +6,12 @@ use clap::{Parser, Subcommand};
 #[command(name = "ferrometer", about = "Lightweight telemetry collector")]
 pub struct Cli {
     /// Config file path
-    #[arg(short, long, global = true, default_value = "/etc/ferrometer/config.toml")]
+    #[arg(
+        short,
+        long,
+        global = true,
+        default_value = "/etc/ferrometer/config.toml"
+    )]
     pub config: PathBuf,
 
     /// Increase verbosity (-v, -vv, -vvv)

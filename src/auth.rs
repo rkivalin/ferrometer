@@ -27,8 +27,8 @@ pub async fn resolve_header(cfg: &AuthConfig) -> Result<Option<String>> {
             (None, Some(path)) => read_trimmed(path).await?,
             (None, None) => unreachable!("AuthConfig::validate guards this"),
         };
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(format!("{username}:{password}"));
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
         return Ok(Some(format!("Basic {encoded}")));
     }
 
@@ -36,11 +36,11 @@ pub async fn resolve_header(cfg: &AuthConfig) -> Result<Option<String>> {
 }
 
 async fn read_trimmed(path: &std::path::Path) -> Result<String> {
-    let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-        Error::FileRead {
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| Error::FileRead {
             path: path.to_path_buf(),
             source: e,
-        }
-    })?;
+        })?;
     Ok(content.trim().to_string())
 }

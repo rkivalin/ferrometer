@@ -84,9 +84,8 @@ pub struct AuthConfig {
 impl AuthConfig {
     /// Structural validation. Run at config load.
     pub fn validate(&self, ctx: &str) -> Result<()> {
-        let basic = self.username.is_some()
-            || self.password.is_some()
-            || self.password_file.is_some();
+        let basic =
+            self.username.is_some() || self.password.is_some() || self.password_file.is_some();
         let bearer = self.bearer_token.is_some() || self.bearer_token_file.is_some();
         let header = self.authorization.is_some();
 
@@ -420,10 +419,7 @@ pub struct OtlphttpForwarderConfig {
     pub tls: TlsConfig,
     #[serde(default)]
     pub compression: Compression,
-    #[serde(
-        deserialize_with = "deserialize_duration",
-        default = "default_timeout"
-    )]
+    #[serde(deserialize_with = "deserialize_duration", default = "default_timeout")]
     pub timeout: Duration,
     #[serde(default = "default_buffer_max_metrics")]
     pub buffer_max_metrics: usize,
@@ -470,10 +466,18 @@ fn default_net_devices() -> String {
 }
 
 fn default_unix_collectors() -> Vec<String> {
-    ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect()
+    [
+        "cpu",
+        "memory",
+        "disk",
+        "filesystem",
+        "netdev",
+        "loadavg",
+        "uname",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 fn default_timeout() -> Duration {
@@ -588,9 +592,8 @@ impl Config {
     /// not have the service's `STATE_DIRECTORY` / `CREDENTIALS_DIRECTORY`
     /// env vars in scope, but the config is still well-formed.
     pub fn load_unresolved(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            Error::Config(format!("failed to read {}: {e}", path.display()))
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
         let config: Config = toml::from_str(&content)
             .map_err(|e| Error::Config(format!("failed to parse config: {e}")))?;
         config.validate()?;
@@ -826,9 +829,9 @@ fn resolve_placeholder(inner: &str, instance_name: &str) -> std::result::Result<
 }
 
 fn expand_path(p: &Path, instance_name: &str) -> Result<PathBuf> {
-    let s = p.to_str().ok_or_else(|| {
-        Error::Config(format!("non-utf8 path in config: {}", p.display()))
-    })?;
+    let s = p
+        .to_str()
+        .ok_or_else(|| Error::Config(format!("non-utf8 path in config: {}", p.display())))?;
     Ok(PathBuf::from(expand_placeholders(s, instance_name)?))
 }
 

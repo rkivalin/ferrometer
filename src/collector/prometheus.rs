@@ -29,19 +29,14 @@ pub struct PrometheusScraper {
 }
 
 impl PrometheusScraper {
-    pub async fn new(
-        name: &str,
-        config: &PrometheusCollectorConfig,
-    ) -> Result<Self> {
+    pub async fn new(name: &str, config: &PrometheusCollectorConfig) -> Result<Self> {
         let auth_header = auth::resolve_header(&config.auth).await?;
 
         let builder = tls::configure(reqwest::Client::builder(), &config.tls).await?;
         let client = builder
             .timeout(config.scrape_timeout)
             .build()
-            .map_err(|e| {
-                Error::Collector(format!("failed to create HTTP client: {e}"))
-            })?;
+            .map_err(|e| Error::Collector(format!("failed to create HTTP client: {e}")))?;
 
         // Base labels come purely from user config. Nothing is auto-injected
         // — instance/host identity lives in the forwarder's resource
@@ -53,8 +48,11 @@ impl PrometheusScraper {
             .collect();
 
         let mut cache = LabelCache::new(base);
-        let health_labels =
-            cache.intern([("scraper".to_string(), name.to_string())].into_iter().collect());
+        let health_labels = cache.intern(
+            [("scraper".to_string(), name.to_string())]
+                .into_iter()
+                .collect(),
+        );
 
         Ok(Self {
             name: name.to_string(),
@@ -146,7 +144,11 @@ impl Collector for PrometheusScraper {
 
         let up = self.last_up == Some(true);
         let labels = &self.health_labels;
-        metrics.push(Metric::gauge("up", if up { 1.0 } else { 0.0 }, labels.clone()));
+        metrics.push(Metric::gauge(
+            "up",
+            if up { 1.0 } else { 0.0 },
+            labels.clone(),
+        ));
         metrics.push(Metric::gauge(
             "scrape_duration_seconds",
             duration.as_secs_f64(),
@@ -172,9 +174,8 @@ impl PrometheusScraper {
         let body = self.scrape().await?;
 
         let lines = body.lines().map(|l| Ok(l.to_string()));
-        let scrape = Scrape::parse(lines).map_err(|e| {
-            Error::Collector(format!("parse scrape {}: {e}", self.url))
-        })?;
+        let scrape = Scrape::parse(lines)
+            .map_err(|e| Error::Collector(format!("parse scrape {}: {e}", self.url)))?;
 
         let samples = scrape.samples.len();
         let mut metrics = Vec::with_capacity(samples + 3);
@@ -213,9 +214,7 @@ impl PrometheusScraper {
         let timestamp = sample
             .timestamp
             .timestamp_nanos_opt()
-            .map(|ns| {
-                std::time::UNIX_EPOCH + Duration::from_nanos(ns.max(0) as u64)
-            })
+            .map(|ns| std::time::UNIX_EPOCH + Duration::from_nanos(ns.max(0) as u64))
             .unwrap_or_else(std::time::SystemTime::now);
 
         Some(Metric {

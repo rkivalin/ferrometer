@@ -16,7 +16,6 @@ use crate::auth;
 use crate::config::{Compression, OtlphttpForwarderConfig};
 use crate::error::{Error, Result};
 use crate::forwarder::Forwarder;
-use crate::tls;
 use crate::proto::opentelemetry::proto::{
     collector::metrics::v1::ExportMetricsServiceRequest,
     common::v1::{AnyValue, KeyValue, any_value},
@@ -27,6 +26,7 @@ use crate::proto::opentelemetry::proto::{
     resource::v1::Resource,
 };
 use crate::signal::{Metric, MetricType};
+use crate::tls;
 
 struct BufferState {
     batches: VecDeque<Vec<Metric>>,
@@ -216,16 +216,12 @@ impl OtlphttpForwarder {
 
         // reqwest has fully consumed (or dropped) the body stream by now,
         // so the stream's Arc clone is released.
-        let popped = Arc::try_unwrap(popped)
-            .expect("body stream should have released its Arc by now");
+        let popped =
+            Arc::try_unwrap(popped).expect("body stream should have released its Arc by now");
 
         match send_result {
             Ok(resp) if resp.status().is_success() => {
-                tracing::debug!(
-                    forwarder = self.name,
-                    metrics = total,
-                    "forwarded metrics"
-                );
+                tracing::debug!(forwarder = self.name, metrics = total, "forwarded metrics");
                 Ok(total)
             }
             Ok(resp) => {
@@ -402,7 +398,5 @@ fn labels_to_attributes(labels: &BTreeMap<String, String>) -> Vec<KeyValue> {
 }
 
 fn system_time_to_nanos(t: SystemTime) -> u64 {
-    t.duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
+    t.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
 }

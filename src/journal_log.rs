@@ -10,9 +10,7 @@
 use std::fmt;
 
 use tracing::{Event, Level, Subscriber};
-use tracing_subscriber::fmt::{
-    FmtContext, FormatEvent, FormatFields, format::Writer,
-};
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, format::Writer};
 use tracing_subscriber::registry::LookupSpan;
 
 pub struct JournalFormat;
@@ -30,9 +28,9 @@ where
     ) -> fmt::Result {
         // Map tracing levels to syslog priority numbers per RFC 5424.
         let priority = match *event.metadata().level() {
-            Level::ERROR => 3, // err
-            Level::WARN => 4,  // warning
-            Level::INFO => 6,  // info
+            Level::ERROR => 3,                // err
+            Level::WARN => 4,                 // warning
+            Level::INFO => 6,                 // info
             Level::DEBUG | Level::TRACE => 7, // debug
         };
         write!(writer, "<{priority}>")?;

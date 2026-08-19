@@ -155,8 +155,8 @@ async fn scheduler_loop(
         //      - earliest soft deadline has elapsed
         let any_active = scheduleds.iter().any(|s| s.active.is_some());
         let earliest_soft = finished.iter().map(|f| f.soft_deadline_at).min();
-        let ready_to_emit = !finished.is_empty()
-            && (!any_active || earliest_soft.is_some_and(|d| d <= now));
+        let ready_to_emit =
+            !finished.is_empty() && (!any_active || earliest_soft.is_some_and(|d| d <= now));
 
         if ready_to_emit {
             submit_batch(&mut finished, forwarders);
@@ -239,15 +239,12 @@ fn collector_schedule_params(cc: &CollectorConfig) -> (Duration, Duration) {
     }
 }
 
-async fn build_collector(
-    name: &str,
-    config: &CollectorConfig,
-) -> Result<Box<dyn Collector>> {
+async fn build_collector(name: &str, config: &CollectorConfig) -> Result<Box<dyn Collector>> {
     match config {
         #[cfg(feature = "collector-unix")]
-        CollectorConfig::Unix(c) => {
-            Ok(Box::new(crate::collector::unix::UnixCollector::new(name, c)?))
-        }
+        CollectorConfig::Unix(c) => Ok(Box::new(crate::collector::unix::UnixCollector::new(
+            name, c,
+        )?)),
         #[cfg(not(feature = "collector-unix"))]
         CollectorConfig::Unix(_) => Err(crate::error::Error::Config(format!(
             "collector {name}: unix collector not compiled (enable feature 'collector-unix')"
@@ -266,13 +263,12 @@ async fn build_collector(
 async fn build_forwarder(name: &str, config: &ForwarderConfig) -> Result<Arc<dyn Forwarder>> {
     match config {
         #[cfg(feature = "forwarder-otlphttp")]
-        ForwarderConfig::Otlphttp(c) =>
-            Ok(crate::forwarder::otlphttp::OtlphttpForwarder::new(name, c).await?),
-        #[cfg(not(feature = "forwarder-otlphttp"))]
-        ForwarderConfig::Otlphttp(_) => {
-            Err(crate::error::Error::Config(format!(
-                "forwarder {name}: otlphttp forwarder not compiled (enable feature 'forwarder-otlphttp')"
-            )))
+        ForwarderConfig::Otlphttp(c) => {
+            Ok(crate::forwarder::otlphttp::OtlphttpForwarder::new(name, c).await?)
         }
+        #[cfg(not(feature = "forwarder-otlphttp"))]
+        ForwarderConfig::Otlphttp(_) => Err(crate::error::Error::Config(format!(
+            "forwarder {name}: otlphttp forwarder not compiled (enable feature 'forwarder-otlphttp')"
+        ))),
     }
 }

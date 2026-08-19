@@ -5,8 +5,8 @@ use crate::error::Result;
 use crate::signal::{Labels, Metric, MetricType};
 
 pub fn collect(cache: &mut LabelCache, filter: &Regex) -> Result<Vec<Metric>> {
-    let stats = procfs::diskstats()
-        .map_err(|e| crate::error::Error::Collector(format!("disk: {e}")))?;
+    let stats =
+        procfs::diskstats().map_err(|e| crate::error::Error::Collector(format!("disk: {e}")))?;
     let mut metrics = Vec::new();
 
     for disk in stats {

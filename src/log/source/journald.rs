@@ -389,4 +389,3 @@ fn read_saved_cursor(path: &PathBuf) -> Result<Option<Cursor>> {
         }),
     }
 }
-

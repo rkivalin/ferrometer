@@ -1,0 +1,4 @@
+# Default rustfmt style; this file exists so plain `rustfmt` (outside cargo)
+# picks the right edition. Check with `cargo fmt --check`.
+edition = "2024"
+style_edition = "2024"

@@ -4,12 +4,6 @@
     feature = "log-sink-loki"
 ))]
 mod auth;
-#[cfg(any(
-    feature = "forwarder-otlphttp",
-    feature = "collector-prometheus",
-    feature = "log-sink-loki"
-))]
-mod tls;
 mod cli;
 mod collector;
 mod config;
@@ -20,6 +14,12 @@ mod journal_log;
 mod log;
 mod pipeline;
 mod signal;
+#[cfg(any(
+    feature = "forwarder-otlphttp",
+    feature = "collector-prometheus",
+    feature = "log-sink-loki"
+))]
+mod tls;
 
 #[cfg(feature = "forwarder-otlphttp")]
 mod proto;
@@ -51,8 +51,7 @@ async fn main() -> anyhow::Result<()> {
         2 => "ferrometer=trace",
         _ => "trace",
     };
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
     if journal_log::under_journald() {
         // stderr goes to the journal — drop our timestamps + colors and let
         // journald see priorities via the syslog `<N>` prefix.
@@ -85,8 +84,7 @@ async fn main() -> anyhow::Result<()> {
                         .await
                         .map_err(|e| anyhow::anyhow!("metrics task: {e}"))??;
                     for h in logs_handles {
-                        h.await
-                            .map_err(|e| anyhow::anyhow!("logs task: {e}"))??;
+                        h.await.map_err(|e| anyhow::anyhow!("logs task: {e}"))??;
                     }
                     Ok::<_, anyhow::Error>(())
                 })
@@ -118,10 +116,10 @@ async fn spawn_logs(
 
     use config::{LogSinkConfig, LogSourceConfig};
     use log::shipper::Shipper;
-    use log::sink::loki::LokiSink;
-    use log::source::journald::JournaldSource;
     use log::sink::Sink;
+    use log::sink::loki::LokiSink;
     use log::source::Source;
+    use log::source::journald::JournaldSource;
 
     let mut handles = Vec::new();
     for (name, shipper_config) in logs_config.shippers {

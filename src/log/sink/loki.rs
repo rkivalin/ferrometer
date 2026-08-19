@@ -86,8 +86,7 @@ impl LokiSink {
 
     fn build_body(&self, entries: &[LogEntry]) -> Result<Vec<u8>> {
         // Group entries by stream label set.
-        let mut by_stream: BTreeMap<BTreeMap<String, String>, Vec<EntryAdapter>> =
-            BTreeMap::new();
+        let mut by_stream: BTreeMap<BTreeMap<String, String>, Vec<EntryAdapter>> = BTreeMap::new();
         for entry in entries {
             let duration = entry
                 .timestamp
@@ -186,10 +185,7 @@ impl Sink for LokiSink {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| Error::Sink(e.to_string()))?;
+        let resp = req.send().await.map_err(|e| Error::Sink(e.to_string()))?;
         let status = resp.status();
         if status.is_success() {
             tracing::debug!(

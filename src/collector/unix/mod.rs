@@ -29,7 +29,9 @@ pub struct UnixCollector {
 
 impl UnixCollector {
     pub fn new(name: &str, config: &UnixCollectorConfig) -> Result<Self> {
-        let base: Labels = config.static_labels.iter()
+        let base: Labels = config
+            .static_labels
+            .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         Ok(Self {
@@ -42,14 +44,10 @@ impl UnixCollector {
                 crate::error::Error::Config(format!("invalid net-devices regex: {e}"))
             })?,
             fs_mount_filter: Regex::new(&config.filesystem_mount_points).map_err(|e| {
-                crate::error::Error::Config(format!(
-                    "invalid filesystem-mount-points regex: {e}"
-                ))
+                crate::error::Error::Config(format!("invalid filesystem-mount-points regex: {e}"))
             })?,
             fs_type_filter: Regex::new(&config.filesystem_fs_types).map_err(|e| {
-                crate::error::Error::Config(format!(
-                    "invalid filesystem-fs-types regex: {e}"
-                ))
+                crate::error::Error::Config(format!("invalid filesystem-fs-types regex: {e}"))
             })?,
             fs_dedupe_devices: config.filesystem_dedupe_devices,
             cache: LabelCache::new(base),
