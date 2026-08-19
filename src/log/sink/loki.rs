@@ -195,12 +195,10 @@ impl Sink for LokiSink {
             );
             Ok(())
         } else {
-            // Loki error bodies end with a newline; trim so the message
-            // stays on one line in our own logs.
             let text = resp.text().await.unwrap_or_default();
-            let text = text.trim();
+            let text = summarize_body(&text);
             let msg = format!("HTTP {status}: {text}");
-            if is_payload_too_large(status, text) {
+            if is_payload_too_large(status, &text) {
                 Err(Error::SinkPayloadTooLarge(msg))
             } else if status == reqwest::StatusCode::BAD_REQUEST {
                 // Loki validates per entry: valid entries are ingested,
@@ -215,6 +213,19 @@ impl Sink for LokiSink {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+/// Error bodies go into our own log line, which journald splits on
+/// newlines: Loki's end with `\n`, a proxy's 413 is a multi-line HTML page.
+/// Collapse all whitespace runs to one space and cap the length so the
+/// message always stays on one line.
+fn summarize_body(body: &str) -> String {
+    const MAX: usize = 300;
+    let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    match collapsed.char_indices().nth(MAX) {
+        Some((i, _)) => format!("{}…", &collapsed[..i]),
+        None => collapsed,
     }
 }
 
@@ -252,6 +263,23 @@ fn normalize_endpoint(raw: &str) -> String {
 mod tests {
     use super::*;
     use reqwest::StatusCode;
+
+    #[test]
+    fn body_summary_is_single_line_and_bounded() {
+        assert_eq!(
+            summarize_body("rpc error: code = ResourceExhausted\n"),
+            "rpc error: code = ResourceExhausted"
+        );
+        assert_eq!(
+            summarize_body(
+                "<html>\n<head><title>413 Request Entity Too Large</title></head>\n<body>\n</body>\n</html>\n"
+            ),
+            "<html> <head><title>413 Request Entity Too Large</title></head> <body> </body> </html>"
+        );
+        let long = "x".repeat(1000);
+        let summary = summarize_body(&long);
+        assert!(summary.chars().count() <= 301 && summary.ends_with('…'));
+    }
 
     #[test]
     fn payload_too_large_classification() {
