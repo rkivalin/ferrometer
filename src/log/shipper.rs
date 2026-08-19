@@ -5,7 +5,7 @@ use tokio::time::Instant;
 
 use crate::error::{Error, Result};
 use crate::log::sink::Sink;
-use crate::log::source::{LogEntry, Source};
+use crate::log::source::{Batch, LogEntry, Source};
 
 /// Drives one Source → Sink pair. The source internally decides when a
 /// batch is "ready" (size limit reached or debounce window elapsed since
@@ -56,13 +56,7 @@ impl Shipper {
         let mut shutdown = std::pin::pin!(signal::ctrl_c());
         let mut backoff = Duration::ZERO;
         let mut backoff_until: Option<Instant> = None;
-        // Split state for the in-flight batch. `sent` entries from the front
-        // have been delivered but not yet acked (ack is per batch, by end
-        // cursor); `chunk` caps how many entries go into one request. Both
-        // reset on ack. Relies on peek_batch only ever appending to the
-        // in-flight batch between calls, so a prefix count stays valid.
-        let mut sent: usize = 0;
-        let mut chunk: usize = usize::MAX;
+        let mut progress = Progress::default();
 
         tracing::info!(
             source = self.source.name(),
@@ -92,37 +86,34 @@ impl Shipper {
             };
 
             let total = batch.entries.len();
-            let pending = &batch.entries[sent.min(total)..];
+            let pending = &batch.entries[progress.sent.min(total)..];
             if pending.is_empty() {
                 // Everything delivered (or the batch was empty) — ack and
                 // start fresh.
-                self.source.ack(&batch.end_cursor).await?;
-                sent = 0;
-                chunk = usize::MAX;
+                self.finish_batch(&batch, &mut progress).await?;
                 continue;
             }
-            let n = pending.len().min(chunk);
+            let n = pending.len().min(progress.chunk);
             let slice = &pending[..n];
 
             let send_result = tokio::select! {
                 r = self.sink.send(slice) => r,
                 _ = &mut shutdown => break,
             };
+            progress.requests += 1;
 
             match send_result {
                 Ok(()) => {
-                    sent += n;
+                    progress.sent += n;
                     backoff = Duration::ZERO;
                     backoff_until = None;
-                    if sent >= total {
-                        self.source.ack(&batch.end_cursor).await?;
-                        sent = 0;
-                        chunk = usize::MAX;
+                    if progress.sent >= total {
+                        self.finish_batch(&batch, &mut progress).await?;
                     } else {
                         tracing::debug!(
                             source = self.source.name(),
                             sink = self.sink.name(),
-                            sent,
+                            sent = progress.sent,
                             total,
                             "shipped partial batch"
                         );
@@ -141,21 +132,21 @@ impl Shipper {
                             message = %truncate(&entry.message, 200),
                             "dropping log entry: sink rejects it as too large on its own"
                         );
-                        sent += 1;
-                        if sent >= total {
-                            self.source.ack(&batch.end_cursor).await?;
-                            sent = 0;
-                            chunk = usize::MAX;
+                        progress.sent += 1;
+                        progress.dropped += 1;
+                        if progress.sent >= total {
+                            self.finish_batch(&batch, &mut progress).await?;
                         }
                     } else {
-                        chunk = n / 2;
+                        progress.chunk = n / 2;
+                        progress.splits += 1;
                         tracing::warn!(
                             source = self.source.name(),
                             sink = self.sink.name(),
                             error = %msg,
                             entries = n,
                             approx_bytes = approx_size(slice),
-                            next_chunk = chunk,
+                            next_chunk = progress.chunk,
                             "sink rejected batch as too large, splitting"
                         );
                     }
@@ -170,13 +161,12 @@ impl Shipper {
                         "sink rejected entries as invalid; dropping them (valid entries in the \
                          request were still ingested)"
                     );
-                    sent += n;
+                    progress.sent += n;
+                    progress.rejected += n;
                     backoff = Duration::ZERO;
                     backoff_until = None;
-                    if sent >= total {
-                        self.source.ack(&batch.end_cursor).await?;
-                        sent = 0;
-                        chunk = usize::MAX;
+                    if progress.sent >= total {
+                        self.finish_batch(&batch, &mut progress).await?;
                     }
                 }
                 Err(e) => {
@@ -206,6 +196,61 @@ impl Shipper {
         );
         Ok(())
     }
+
+    /// Ack the in-flight batch and reset split progress. If delivery was
+    /// anything other than one clean request, summarise how it went at info
+    /// so the outcome of a split is visible without debug logging.
+    async fn finish_batch(&mut self, batch: &Batch, progress: &mut Progress) -> Result<()> {
+        self.source.ack(&batch.end_cursor).await?;
+        if progress.splits > 0 || progress.dropped > 0 || progress.rejected > 0 {
+            tracing::info!(
+                source = self.source.name(),
+                sink = self.sink.name(),
+                entries = batch.entries.len(),
+                approx_bytes = batch.approx_bytes,
+                requests = progress.requests,
+                splits = progress.splits,
+                dropped = progress.dropped,
+                rejected = progress.rejected,
+                "batch delivered after splitting/dropping"
+            );
+        }
+        *progress = Progress::default();
+        Ok(())
+    }
+}
+
+/// Delivery progress of the in-flight batch, for the split/drop paths.
+/// `sent` entries from the front have been delivered (or deliberately
+/// dropped) but not yet acked — ack is per batch, by end cursor — and
+/// `chunk` caps how many entries go into one request. Reset on ack. Relies
+/// on peek_batch only ever appending to the in-flight batch between calls,
+/// so a prefix count stays valid. The remaining counters feed the summary
+/// log in `finish_batch`.
+struct Progress {
+    sent: usize,
+    chunk: usize,
+    /// Requests made for this batch, successful or not.
+    requests: u32,
+    /// Too-large rejections that halved `chunk`.
+    splits: u32,
+    /// Entries dropped because the sink refused them on their own.
+    dropped: usize,
+    /// Entries in requests the sink rejected as invalid (HTTP 400).
+    rejected: usize,
+}
+
+impl Default for Progress {
+    fn default() -> Self {
+        Self {
+            sent: 0,
+            chunk: usize::MAX,
+            requests: 0,
+            splits: 0,
+            dropped: 0,
+            rejected: 0,
+        }
+    }
 }
 
 fn approx_size(entries: &[LogEntry]) -> usize {
@@ -231,7 +276,6 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::log::source::Batch;
 
     fn entry(msg: &str) -> LogEntry {
         LogEntry {
