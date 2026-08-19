@@ -8,6 +8,11 @@ ferrometer (0.4.0-1) unstable; urgency=low
     outage. The backlog was batched by entry count only, so a batch of large
     entries could exceed Loki's 4 MiB gRPC message limit (ResourceExhausted)
     and be retried verbatim forever. Batches are now also byte-capped.
+  * Fix: the log shipper recovers from payload-too-large rejections (HTTP 413
+    or a body reporting a message-size limit): it re-sends the batch in
+    progressively smaller chunks instead of retrying verbatim, and drops —
+    with an error log — any single entry the sink refuses on its own.
+  * Loki error bodies are trimmed before logging (no more two-line warnings).
 
  -- Roman Kivalin <roman@shl.dev>  Wed, 13 May 2026 00:00:00 +0000
 

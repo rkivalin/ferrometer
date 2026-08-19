@@ -8,7 +8,7 @@ use crate::auth;
 use crate::config::LokiSinkConfig;
 use crate::error::{Error, Result};
 use crate::log::sink::Sink;
-use crate::log::source::Batch;
+use crate::log::source::LogEntry;
 use crate::tls;
 
 /// Push sink for Grafana Loki using the native protobuf body + snappy
@@ -84,11 +84,11 @@ impl LokiSink {
         })
     }
 
-    fn build_body(&self, batch: &Batch) -> Result<Vec<u8>> {
+    fn build_body(&self, entries: &[LogEntry]) -> Result<Vec<u8>> {
         // Group entries by stream label set.
         let mut by_stream: BTreeMap<BTreeMap<String, String>, Vec<EntryAdapter>> =
             BTreeMap::new();
-        for entry in &batch.entries {
+        for entry in entries {
             let duration = entry
                 .timestamp
                 .duration_since(UNIX_EPOCH)
@@ -162,16 +162,16 @@ fn format_label_string(labels: &BTreeMap<String, String>) -> String {
 
 #[async_trait]
 impl Sink for LokiSink {
-    async fn send(&self, batch: &Batch) -> Result<()> {
-        if batch.entries.is_empty() {
+    async fn send(&self, entries: &[LogEntry]) -> Result<()> {
+        if entries.is_empty() {
             return Ok(());
         }
 
-        let body = self.build_body(batch)?;
+        let body = self.build_body(entries)?;
         tracing::debug!(
             sink = self.name,
             endpoint = self.endpoint,
-            entries = batch.entries.len(),
+            entries = entries.len(),
             body_bytes = body.len(),
             "loki: POST"
         );
@@ -194,13 +194,21 @@ impl Sink for LokiSink {
         if status.is_success() {
             tracing::debug!(
                 sink = self.name,
-                entries = batch.entries.len(),
+                entries = entries.len(),
                 "shipped log batch"
             );
             Ok(())
         } else {
+            // Loki error bodies end with a newline; trim so the message
+            // stays on one line in our own logs.
             let text = resp.text().await.unwrap_or_default();
-            Err(Error::Sink(format!("HTTP {status}: {text}")))
+            let text = text.trim();
+            let msg = format!("HTTP {status}: {text}");
+            if is_payload_too_large(status, text) {
+                Err(Error::SinkPayloadTooLarge(msg))
+            } else {
+                Err(Error::Sink(msg))
+            }
         }
     }
 
@@ -209,11 +217,63 @@ impl Sink for LokiSink {
     }
 }
 
+/// Whether an error response means the request body itself is over a size
+/// limit, so that retrying it verbatim can never succeed. HTTP 413 is the
+/// canonical signal (proxies, and Loki's own HTTP server limit); Loki also
+/// surfaces its internal gRPC limit as HTTP 500 with a body like
+/// `rpc error: code = ResourceExhausted desc = grpc: received message
+/// larger than max (N vs. 4194304)`.
+fn is_payload_too_large(status: reqwest::StatusCode, body: &str) -> bool {
+    if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+        return true;
+    }
+    let body = body.to_ascii_lowercase();
+    [
+        "larger than max",
+        "too large",
+        "too big",
+        "exceeds the maximum",
+    ]
+    .iter()
+    .any(|needle| body.contains(needle))
+}
+
 fn normalize_endpoint(raw: &str) -> String {
     let trimmed = raw.trim_end_matches('/').to_string();
     if trimmed.ends_with("/loki/api/v1/push") {
         trimmed
     } else {
         format!("{trimmed}/loki/api/v1/push")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn payload_too_large_classification() {
+        assert!(is_payload_too_large(StatusCode::PAYLOAD_TOO_LARGE, ""));
+        assert!(is_payload_too_large(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "rpc error: code = ResourceExhausted desc = grpc: received message larger than max (5242880 vs. 4194304)"
+        ));
+        assert!(is_payload_too_large(
+            StatusCode::BAD_GATEWAY,
+            "<html>413 Request Entity Too Large</html>"
+        ));
+        assert!(!is_payload_too_large(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "rpc error: code = Unavailable desc = connection refused"
+        ));
+        assert!(!is_payload_too_large(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Ingestion rate limit exceeded"
+        ));
+        assert!(!is_payload_too_large(
+            StatusCode::BAD_REQUEST,
+            "entry too far behind"
+        ));
     }
 }

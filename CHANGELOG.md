@@ -9,6 +9,8 @@
 ### Fixes
 
 - journald → Loki shipping could wedge permanently after a sink outage: the backlog was batched by entry count only, so a batch of large entries could exceed Loki's 4 MiB gRPC message limit (`ResourceExhausted`) and be retried verbatim forever. Batches are now also byte-capped (see `batch-max-bytes`).
+- Log shipper recovers from payload-too-large rejections (HTTP 413, or an error body reporting a message-size limit such as Loki's `received message larger than max`): instead of retrying the same batch verbatim it re-sends in progressively smaller chunks, and drops — with an `error`-level log carrying the labels and message head — any single entry the sink refuses on its own. Covers pathological entries and server limits lower than `batch-max-bytes`.
+- Loki error response bodies are trimmed before logging, so `log ship failed` warnings no longer wrap onto a second journal line.
 
 ### Changes
 

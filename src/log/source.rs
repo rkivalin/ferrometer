@@ -80,7 +80,10 @@ pub trait Source {
     /// Subsequent calls without an intervening `ack` return the same batch
     /// (possibly topped up with entries that accumulated during any backoff
     /// between retries) so failed sends can be retried against the same
-    /// data without re-reading the underlying source from scratch.
+    /// data without re-reading the underlying source from scratch. A top-up
+    /// may only *append*: entries already in the batch keep their order and
+    /// positions, because the shipper tracks partial delivery of a split
+    /// batch as a prefix length.
     ///
     /// Returns `None` only in cases where the source is exhausted with no
     /// more data forthcoming (not applicable to tailing sources like

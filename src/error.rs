@@ -19,6 +19,13 @@ pub enum Error {
     #[error("log sink error: {0}")]
     Sink(String),
 
+    /// The sink rejected the request because the payload is too large (HTTP
+    /// 413, or a 5xx whose body reports a message-size limit). Retrying the
+    /// same payload verbatim can never succeed; the shipper splits instead.
+    #[cfg(all(feature = "log-source-journald-systemd", feature = "log-sink-loki"))]
+    #[error("log sink rejected payload as too large: {0}")]
+    SinkPayloadTooLarge(String),
+
     #[error("failed to read {path}: {source}")]
     FileRead {
         path: PathBuf,
