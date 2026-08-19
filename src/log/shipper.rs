@@ -22,6 +22,11 @@ use crate::log::source::{LogEntry, Source};
 /// delivered chunks after restart; Loki dedupes identical entries, and the
 /// split path is rare by design (the source caps batches by bytes).
 ///
+/// If the sink rejects a request as invalid (`Error::SinkRejected`, HTTP
+/// 400) the rejection is likewise permanent — Loki has already ingested the
+/// valid entries and dropped the rest — so the shipper logs it at error
+/// level with the sink's message and treats the request as delivered.
+///
 /// No ring buffer — the underlying log store (e.g. journald) is the
 /// durable buffer. During a sink outage memory stays flat; on recovery
 /// the shipper walks forward from the last acked cursor.
@@ -155,6 +160,25 @@ impl Shipper {
                         );
                     }
                 }
+                Err(Error::SinkRejected(msg)) => {
+                    tracing::error!(
+                        source = self.source.name(),
+                        sink = self.sink.name(),
+                        error = %msg,
+                        entries = n,
+                        approx_bytes = approx_size(slice),
+                        "sink rejected entries as invalid; dropping them (valid entries in the \
+                         request were still ingested)"
+                    );
+                    sent += n;
+                    backoff = Duration::ZERO;
+                    backoff_until = None;
+                    if sent >= total {
+                        self.source.ack(&batch.end_cursor).await?;
+                        sent = 0;
+                        chunk = usize::MAX;
+                    }
+                }
                 Err(e) => {
                     backoff = if backoff.is_zero() {
                         self.backoff_initial
@@ -259,8 +283,9 @@ mod tests {
     }
 
     /// Rejects any request with more than `max_entries` entries, or any
-    /// single entry whose message is longer than `max_line`, as too large.
-    /// Records the message lists of successful sends.
+    /// single entry whose message is longer than `max_line`, as too large;
+    /// rejects any request containing a message starting with "bad" as
+    /// invalid. Records the message lists of successful sends.
     struct MockSink {
         max_entries: usize,
         max_line: usize,
@@ -276,6 +301,9 @@ mod tests {
                 || entries.iter().any(|e| e.message.len() > self.max_line)
             {
                 return Err(Error::SinkPayloadTooLarge("HTTP 413".into()));
+            }
+            if entries.iter().any(|e| e.message.starts_with("bad")) {
+                return Err(Error::SinkRejected("HTTP 400".into()));
             }
             self.sends
                 .lock()
@@ -375,6 +403,20 @@ mod tests {
         let (sends, acks, _) = run(vec![batch(&["toolong"], "c1")], 100, 3).await;
         assert!(sends.is_empty());
         assert_eq!(acks, vec!["c1"]);
+    }
+
+    #[tokio::test]
+    async fn rejected_batch_is_dropped_and_acked() {
+        let (sends, acks, attempts) = run(
+            vec![batch(&["a", "bad", "b"], "c1"), batch(&["c"], "c2")],
+            100,
+            100,
+        )
+        .await;
+        // The 400 batch is acked without retry or split; shipping continues.
+        assert_eq!(sends, vec![vec!["c"]]);
+        assert_eq!(acks, vec!["c1", "c2"]);
+        assert_eq!(attempts, 2);
     }
 
     #[test]

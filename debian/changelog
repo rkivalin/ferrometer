@@ -12,6 +12,10 @@ ferrometer (0.4.0-1) unstable; urgency=low
     or a body reporting a message-size limit): it re-sends the batch in
     progressively smaller chunks instead of retrying verbatim, and drops —
     with an error log — any single entry the sink refuses on its own.
+  * Fix: Loki HTTP 400 validation rejections (timestamp too old, line too
+    long, bad labels, ...) are no longer retried forever. Loki ingests the
+    valid entries and drops the offending ones, so the shipper logs the
+    rejection at error level and acks the batch.
   * Loki error bodies are trimmed before logging (no more two-line warnings).
 
  -- Roman Kivalin <roman@shl.dev>  Wed, 13 May 2026 00:00:00 +0000

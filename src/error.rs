@@ -26,6 +26,15 @@ pub enum Error {
     #[error("log sink rejected payload as too large: {0}")]
     SinkPayloadTooLarge(String),
 
+    /// The sink rejected (part of) the request as invalid — HTTP 400. For
+    /// Loki this is a per-entry validation failure (timestamp too old/new,
+    /// line too long, bad labels, …): the valid entries *were* ingested and
+    /// the offending ones dropped server-side, so retrying cannot succeed.
+    /// The shipper logs the rejection and acks.
+    #[cfg(all(feature = "log-source-journald-systemd", feature = "log-sink-loki"))]
+    #[error("log sink rejected payload: {0}")]
+    SinkRejected(String),
+
     #[error("failed to read {path}: {source}")]
     FileRead {
         path: PathBuf,

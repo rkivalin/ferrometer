@@ -114,7 +114,7 @@ job = "haproxy"
 
 ### Logs
 
-Each `[logs.shippers.<name>]` entry pairs one source with one sink. The journald source seeks to the last acked cursor on start, so restarts don't lose or duplicate entries. Batches close at `batch-size` entries (default 1000) or roughly `batch-max-bytes` of payload (default `1M` = 1 MB, under Loki's 4 MiB request limit), whichever comes first; `batch-wait` (default 5s) bounds how long a partial batch is held. If the sink still rejects a request as too large (HTTP 413, or Loki's `received message larger than max`), the shipper splits the batch into smaller chunks rather than retrying it verbatim; an entry that is too large even on its own is dropped with an `error` log.
+Each `[logs.shippers.<name>]` entry pairs one source with one sink. The journald source seeks to the last acked cursor on start, so restarts don't lose or duplicate entries. Batches close at `batch-size` entries (default 1000) or roughly `batch-max-bytes` of payload (default `1M` = 1 MB, under Loki's 4 MiB request limit), whichever comes first; `batch-wait` (default 5s) bounds how long a partial batch is held. If the sink still rejects a request as too large (HTTP 413, or Loki's `received message larger than max`), the shipper splits the batch into smaller chunks rather than retrying it verbatim; an entry that is too large even on its own is dropped with an `error` log. A Loki HTTP 400 validation rejection (timestamp too old, line too long, …) is logged at `error` and acked — Loki ingests the valid entries of such a request and drops the rest server-side, so a retry could never succeed.
 
 ```toml
 [logs.shippers.journal]

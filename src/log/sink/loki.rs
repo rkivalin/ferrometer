@@ -206,6 +206,11 @@ impl Sink for LokiSink {
             let msg = format!("HTTP {status}: {text}");
             if is_payload_too_large(status, text) {
                 Err(Error::SinkPayloadTooLarge(msg))
+            } else if status == reqwest::StatusCode::BAD_REQUEST {
+                // Loki validates per entry: valid entries are ingested,
+                // invalid ones dropped, and the first validation error is
+                // returned as 400. Permanent — see Error::SinkRejected.
+                Err(Error::SinkRejected(msg))
             } else {
                 Err(Error::Sink(msg))
             }
