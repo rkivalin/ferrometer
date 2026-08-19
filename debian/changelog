@@ -1,5 +1,10 @@
 ferrometer (0.4.0-1) unstable; urgency=low
 
+  * Prometheus scraper emits `up` (1/0), `scrape_duration_seconds` and
+    `scrape_samples_scraped` every tick (static labels + scraper="<name>"),
+    so a down target shows as up==0 instead of a missing series. Scrape
+    failures are logged on transitions only (warn on down, info on
+    recovery) instead of once per tick.
   * journald source: new `batch-max-bytes` option (default "1M" = 1,000,000
     bytes; SI units, `MiB` etc. for binary) caps each batch by approximate
     encoded size in addition to the `batch-size` entry count. Applies to

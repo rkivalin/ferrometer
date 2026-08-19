@@ -4,6 +4,7 @@
 
 ### Features
 
+- Prometheus scraper emits scrape-health series every tick, as Prometheus itself does: `up` (1/0), `scrape_duration_seconds`, `scrape_samples_scraped`, labelled with the collector's static labels plus `scraper=<name>`. A down target is now visible as `up == 0` instead of a silently absent series. Scrape failures are logged on state transitions only — `warn` on down, `info` on recovery (with the number of failed ticks), `debug` per repeat — instead of one `warn` per tick.
 - journald source: new `batch-max-bytes` option (default `1M` = 1,000,000 bytes; SI units, `MiB` etc. for binary) caps each batch by approximate encoded size in addition to the `batch-size` entry count. Applies to fresh batches and to the top-up of an in-flight batch during backoff.
 
 ### Fixes

@@ -102,6 +102,8 @@ Metric names follow [node_exporter](https://github.com/prometheus/node_exporter)
 
 Pulls a text-exposition endpoint on an interval. Counter / Gauge / Untyped samples are forwarded as-is; Histogram and Summary samples are dropped (ferrometer's internal model is currently Counter/Gauge only).
 
+Every tick also emits the synthetic scrape-health series Prometheus itself would: `up` (1/0), `scrape_duration_seconds` and `scrape_samples_scraped`, labelled with the collector's static labels plus `scraper=<collector name>`. A down target therefore shows as `up == 0` rather than as a silently absent series — alert on `up == 0` instead of `absent(...)`. Scrape failures are logged on state transitions only (`warn` on down, `info` on recovery with the number of failed ticks; per-tick repeats at `debug`).
+
 ```toml
 [metrics.collectors.haproxy]
 type = "prometheus"

@@ -49,8 +49,11 @@ collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname
 
 # Prometheus scraper — pulls a text-exposition /metrics endpoint on an
 # interval. Counter / Gauge / Untyped samples are forwarded; Histogram and
-# Summary are dropped with a debug log. Scrape failures emit no metrics for
-# that tick (no stale last-seen emission).
+# Summary are dropped with a debug log. Every tick also emits `up` (1/0),
+# `scrape_duration_seconds` and `scrape_samples_scraped` with the static
+# labels plus scraper="<name>". Scrape failures emit up=0 and no target
+# samples for that tick (no stale last-seen emission); they are logged on
+# transitions only (warn on down, info on recovery).
 #
 # [metrics.collectors.haproxy]
 # type = "prometheus"
