@@ -126,8 +126,14 @@ collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname
 #
 # [logs.shippers.journal.source]
 # type = "journald"
-# Optional tuning (shown with defaults):
+# Optional tuning (shown with defaults). A batch closes when it reaches
+# batch-size entries OR roughly batch-max-bytes of encoded payload, whichever
+# comes first — the byte cap keeps a backlog of large entries from growing
+# into a request the sink rejects (Loki's gRPC limit is 4 MiB). Accepts a
+# byte count or "<n>K" / "<n>M" / "<n>G" (SI: 1M = 1000000; use "MiB" etc.
+# for binary units); 0 disables the byte cap.
 # batch-size = 1000
+# batch-max-bytes = "1M"
 # batch-wait = "5s"
 # cursor-file = "${env:STATE_DIRECTORY}/journal.cursor"
 # runtime-only = false       # true → only /run/log/journal (volatile)

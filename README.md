@@ -114,7 +114,7 @@ job = "haproxy"
 
 ### Logs
 
-Each `[logs.shippers.<name>]` entry pairs one source with one sink. The journald source seeks to the last acked cursor on start, so restarts don't lose or duplicate entries.
+Each `[logs.shippers.<name>]` entry pairs one source with one sink. The journald source seeks to the last acked cursor on start, so restarts don't lose or duplicate entries. Batches close at `batch-size` entries (default 1000) or roughly `batch-max-bytes` of payload (default `1M` = 1 MB, under Loki's 4 MiB request limit), whichever comes first; `batch-wait` (default 5s) bounds how long a partial batch is held.
 
 ```toml
 [logs.shippers.journal]

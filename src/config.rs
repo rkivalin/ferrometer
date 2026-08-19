@@ -208,6 +208,17 @@ pub enum LogSourceConfig {
 pub struct JournaldSourceConfig {
     #[serde(default = "default_journald_batch_size")]
     pub batch_size: usize,
+    /// Approximate upper bound on the encoded size of one batch. A batch is
+    /// closed as soon as adding the next entry would exceed this, regardless
+    /// of `batch_size`, so that a backlog of large entries can never grow
+    /// into a request the sink rejects outright (Loki's gRPC limit is 4 MiB).
+    /// Accepts a plain byte count or a string with a K/M/G suffix (SI,
+    /// powers of 1000; `KiB`/`MiB`/`GiB` are binary). Set to 0 to disable.
+    #[serde(
+        deserialize_with = "deserialize_byte_size",
+        default = "default_journald_batch_max_bytes"
+    )]
+    pub batch_max_bytes: usize,
     #[serde(
         deserialize_with = "deserialize_duration",
         default = "default_journald_batch_wait"
@@ -250,6 +261,12 @@ pub struct LokiSinkConfig {
 
 fn default_journald_batch_size() -> usize {
     1000
+}
+
+fn default_journald_batch_max_bytes() -> usize {
+    // ~Promtail's default batch size; comfortably under Loki's 4 MiB gRPC
+    // message limit even after per-stream/protobuf overhead.
+    1_000_000
 }
 
 fn default_journald_batch_wait() -> Duration {
@@ -509,6 +526,53 @@ fn parse_duration(s: &str) -> std::result::Result<Duration, String> {
     }
 }
 
+// Byte-size parsing
+
+fn deserialize_byte_size<'de, D>(deserializer: D) -> std::result::Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Int(u64),
+        Str(String),
+    }
+    match Raw::deserialize(deserializer)? {
+        Raw::Int(n) => usize::try_from(n).map_err(serde::de::Error::custom),
+        Raw::Str(s) => parse_byte_size(&s).map_err(serde::de::Error::custom),
+    }
+}
+
+/// Parse a byte count: a bare integer, or an integer followed by a unit
+/// (case-insensitive, whitespace allowed). `K`/`KB`, `M`/`MB`, `G`/`GB` are
+/// SI (powers of 1000); `KiB`/`MiB`/`GiB` are binary (powers of 1024).
+fn parse_byte_size(s: &str) -> std::result::Result<usize, String> {
+    let s = s.trim();
+    let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let n: u64 = num
+        .parse()
+        .map_err(|_| format!("invalid byte size '{s}': expected <integer>[K|M|G]"))?;
+    let mult: u64 = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "k" | "kb" => 1_000,
+        "m" | "mb" => 1_000_000,
+        "g" | "gb" => 1_000_000_000,
+        "kib" => 1 << 10,
+        "mib" => 1 << 20,
+        "gib" => 1 << 30,
+        other => {
+            return Err(format!(
+                "invalid byte size '{s}': unknown unit '{other}' (expected K, M, or G)"
+            ));
+        }
+    };
+    n.checked_mul(mult)
+        .and_then(|v| usize::try_from(v).ok())
+        .ok_or_else(|| format!("invalid byte size '{s}': out of range"))
+}
+
 // Config loading and validation
 
 impl Config {
@@ -766,4 +830,26 @@ fn expand_path(p: &Path, instance_name: &str) -> Result<PathBuf> {
         Error::Config(format!("non-utf8 path in config: {}", p.display()))
     })?;
     Ok(PathBuf::from(expand_placeholders(s, instance_name)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_size_parsing() {
+        assert_eq!(parse_byte_size("0"), Ok(0));
+        assert_eq!(parse_byte_size("1048576"), Ok(1 << 20));
+        assert_eq!(parse_byte_size("1M"), Ok(1_000_000));
+        assert_eq!(parse_byte_size("2 mb"), Ok(2_000_000));
+        assert_eq!(parse_byte_size("512K"), Ok(512_000));
+        assert_eq!(parse_byte_size("1g"), Ok(1_000_000_000));
+        assert_eq!(parse_byte_size("1MiB"), Ok(1 << 20));
+        assert_eq!(parse_byte_size("1KiB"), Ok(1024));
+        assert_eq!(parse_byte_size("1 gib"), Ok(1 << 30));
+        assert!(parse_byte_size("").is_err());
+        assert!(parse_byte_size("M").is_err());
+        assert!(parse_byte_size("1T").is_err());
+        assert!(parse_byte_size("1.5M").is_err());
+    }
 }

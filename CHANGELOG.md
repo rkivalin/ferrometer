@@ -4,7 +4,11 @@
 
 ### Features
 
+- journald source: new `batch-max-bytes` option (default `1M` = 1,000,000 bytes; SI units, `MiB` etc. for binary) caps each batch by approximate encoded size in addition to the `batch-size` entry count. Applies to fresh batches and to the top-up of an in-flight batch during backoff.
+
 ### Fixes
+
+- journald → Loki shipping could wedge permanently after a sink outage: the backlog was batched by entry count only, so a batch of large entries could exceed Loki's 4 MiB gRPC message limit (`ResourceExhausted`) and be retried verbatim forever. Batches are now also byte-capped (see `batch-max-bytes`).
 
 ### Changes
 

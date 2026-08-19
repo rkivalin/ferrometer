@@ -43,6 +43,14 @@ pub struct JournaldSource {
     /// tail.
     positioned: bool,
     batch_size: usize,
+    /// Approximate byte cap per batch; 0 disables. See
+    /// `JournaldSourceConfig::batch_max_bytes`.
+    batch_max_bytes: usize,
+    /// An entry already read from the journal that did not fit under the
+    /// byte cap of the batch being filled. It is the first entry of the next
+    /// batch; holding it here (rather than stepping the journal back) keeps
+    /// the journal position monotonic and avoids re-reading the record.
+    pending: Option<(LogEntry, Cursor)>,
     batch_wait: Duration,
     /// Mapping journal_field → label_name. Applied per-entry.
     labels_map: BTreeMap<String, String>,
@@ -92,6 +100,8 @@ impl JournaldSource {
             in_flight: None,
             positioned: false,
             batch_size: config.batch_size,
+            batch_max_bytes: config.batch_max_bytes,
+            pending: None,
             batch_wait: config.batch_wait,
             labels_map: config.labels.clone(),
             static_labels,
@@ -151,30 +161,57 @@ impl JournaldSource {
         Ok(())
     }
 
-    /// Read available entries into `batch` up to `batch_size`, advancing the
-    /// journal cursor. Does not block — returns as soon as next_entry()
+    /// Whether `batch` has room for more entries under both the entry-count
+    /// and byte caps. Used by every fill path (initial catch-up, coalesce
+    /// window, and the retry top-up in `peek_batch`) so a batch can never
+    /// grow past the caps no matter how it was assembled.
+    fn batch_has_room(&self, batch: &Batch) -> bool {
+        batch.entries.len() < self.batch_size
+            && (self.batch_max_bytes == 0 || batch.approx_bytes < self.batch_max_bytes)
+    }
+
+    /// Read available entries into `batch` until it is full by count
+    /// (`batch_size`) or by approximate bytes (`batch_max_bytes`), advancing
+    /// the journal cursor. Does not block — returns as soon as next_entry()
     /// returns None.
+    ///
+    /// The byte cap is enforced *before* an entry is admitted: if the next
+    /// entry would push a non-empty batch over the limit it is parked in
+    /// `self.pending` and becomes the first entry of the next batch. A
+    /// single entry larger than the cap is always admitted into an
+    /// otherwise-empty batch — the cap bounds batches, it must not wedge
+    /// the source.
     fn drain_available(&mut self, batch: &mut Batch) -> Result<()> {
-        while batch.entries.len() < self.batch_size {
-            match self
-                .journal
-                .next_entry()
-                .map_err(|e| Error::Source(format!("next_entry: {e}")))?
+        while self.batch_has_room(batch) {
+            let (entry, cursor) = match self.pending.take() {
+                Some(p) => p,
+                None => match self
+                    .journal
+                    .next_entry()
+                    .map_err(|e| Error::Source(format!("next_entry: {e}")))?
+                {
+                    Some(record) => {
+                        let cursor = self
+                            .journal
+                            .cursor()
+                            .map_err(|e| Error::Source(format!("cursor: {e}")))?;
+                        let timestamp = self
+                            .journal
+                            .timestamp()
+                            .map_err(|e| Error::Source(format!("timestamp: {e}")))?;
+                        (self.record_to_entry(record, timestamp), cursor)
+                    }
+                    None => break,
+                },
+            };
+            if self.batch_max_bytes != 0
+                && !batch.entries.is_empty()
+                && batch.approx_bytes + entry.approx_size() > self.batch_max_bytes
             {
-                Some(record) => {
-                    let cursor = self
-                        .journal
-                        .cursor()
-                        .map_err(|e| Error::Source(format!("cursor: {e}")))?;
-                    let timestamp = self
-                        .journal
-                        .timestamp()
-                        .map_err(|e| Error::Source(format!("timestamp: {e}")))?;
-                    batch.entries.push(self.record_to_entry(record, timestamp));
-                    batch.end_cursor = cursor;
-                }
-                None => break,
+                self.pending = Some((entry, cursor));
+                break;
             }
+            batch.push(entry, cursor);
         }
         Ok(())
     }
@@ -210,16 +247,14 @@ impl JournaldSource {
     /// Build a fresh batch: drain any entries already past the current
     /// cursor, then — if nothing was there — block until the journal
     /// signals new data. Once at least one entry is in hand, coalesce
-    /// more entries within `batch_wait` up to `batch_size`.
+    /// more entries within `batch_wait` up to `batch_size` entries or
+    /// `batch_max_bytes` approximate bytes, whichever comes first.
     async fn build_batch(&mut self) -> Result<Batch> {
         if !self.positioned {
             self.position_to_start()?;
         }
 
-        let mut batch = Batch {
-            entries: Vec::new(),
-            end_cursor: String::new(),
-        };
+        let mut batch = Batch::default();
 
         // Immediate catch-up. On restart with a saved cursor there is
         // typically a backlog of entries between the last acked cursor and
@@ -237,7 +272,7 @@ impl JournaldSource {
 
         // Coalesce more entries within the batch window.
         let deadline = Instant::now() + self.batch_wait;
-        while batch.entries.len() < self.batch_size {
+        while self.batch_has_room(&batch) {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 break;
             };
@@ -251,6 +286,7 @@ impl JournaldSource {
 
         tracing::trace!(
             entries = batch.entries.len(),
+            approx_bytes = batch.approx_bytes,
             "journald: built batch"
         );
         Ok(batch)
@@ -307,6 +343,7 @@ impl Source for JournaldSource {
                 tracing::debug!(
                     added = batch.entries.len() - before,
                     total = batch.entries.len(),
+                    approx_bytes = batch.approx_bytes,
                     "journald: topped up in-flight batch"
                 );
             }

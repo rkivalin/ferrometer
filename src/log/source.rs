@@ -27,13 +27,42 @@ pub struct LogEntry {
     pub metadata: BTreeMap<String, String>,
 }
 
+impl LogEntry {
+    /// Approximate wire size of this entry once encoded by a sink, used by
+    /// sources to cap batches by bytes. Counts message, labels and metadata
+    /// plus a small per-field overhead; deliberately errs high (labels are
+    /// counted per entry even though stream-oriented sinks send them once
+    /// per stream) so that a cap derived from it stays safe.
+    pub fn approx_size(&self) -> usize {
+        const FIELD_OVERHEAD: usize = 4;
+        const ENTRY_OVERHEAD: usize = 16; // timestamp + length prefixes
+        let kv = |m: &BTreeMap<String, String>| {
+            m.iter()
+                .map(|(k, v)| k.len() + v.len() + FIELD_OVERHEAD)
+                .sum::<usize>()
+        };
+        ENTRY_OVERHEAD + self.message.len() + kv(&self.labels) + kv(&self.metadata)
+    }
+}
+
 /// A batch of log entries plus the cursor of the last entry. The cursor is
 /// passed back to `Source::ack` after successful delivery; until then the
 /// source keeps the batch cached so retries deliver the same entries.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Batch {
     pub entries: Vec<LogEntry>,
     pub end_cursor: Cursor,
+    /// Running sum of `LogEntry::approx_size` over `entries`. Maintained by
+    /// the source via `push`.
+    pub approx_bytes: usize,
+}
+
+impl Batch {
+    pub fn push(&mut self, entry: LogEntry, cursor: Cursor) {
+        self.approx_bytes += entry.approx_size();
+        self.entries.push(entry);
+        self.end_cursor = cursor;
+    }
 }
 
 /// A pull source of log entries. Source implementations own their own cursor
