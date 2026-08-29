@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.5.0 (unreleased)
+## 0.6.0 (unreleased)
+
+### Features
+
+### Fixes
+
+### Changes
+
+## 0.5.0 (2026-08-29)
 
 ### Features
 

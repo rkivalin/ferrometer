@@ -1,6 +1,6 @@
 # Maintainer: Roman Kivalin <roman@shl.dev>
 pkgname=ferrometer
-pkgver=0.5.0
+pkgver=0.6.0
 pkgrel=1
 pkgdesc='Lightweight telemetry collector'
 arch=('x86_64' 'aarch64')
