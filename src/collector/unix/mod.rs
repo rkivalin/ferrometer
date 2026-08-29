@@ -11,6 +11,7 @@ mod cpu;
 mod disk;
 mod filesystem;
 mod loadavg;
+mod md;
 mod memory;
 mod netdev;
 mod uname;
@@ -73,6 +74,7 @@ impl Collector for UnixCollector {
                     )
                     .await?
                 }
+                "md" => md::collect(&mut self.cache)?,
                 "netdev" => netdev::collect(&mut self.cache, &self.net_filter)?,
                 "loadavg" => loadavg::collect(&mut self.cache)?,
                 "uname" => uname::collect(&mut self.cache)?,

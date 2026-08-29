@@ -6,7 +6,7 @@ A minimal alternative to Grafana Alloy and the OpenTelemetry Collector for hosts
 
 ## Features
 
-- **Unix system metrics** from `/proc` and `/sys` — CPU (incl. frequency / governor / thermal throttle), memory, disk (incl. discards and flushes), filesystem, network, load average, uname.
+- **Unix system metrics** from `/proc` and `/sys` — CPU (incl. frequency / governor / thermal throttle), memory, disk (incl. discards and flushes), filesystem, network, load average, software RAID, uname.
 - **Prometheus scraper** for any text-exposition `/metrics` endpoint.
 - **systemd journal source**, cursor-persisted across restarts so no entries get re-shipped or skipped. Journald is the durable buffer during a sink outage — no in-memory queue.
 - **OTLP HTTP forwarder** (VictoriaMetrics, Grafana Mimir, etc.) with gzip compression, an in-memory ring buffer for outage tolerance, and exponential backoff.
@@ -81,7 +81,7 @@ net-devices = "^(eth|en|wl|bond)"
 filesystem-mount-points = ""                            # include-regex, empty = all
 filesystem-fs-types = ""                                # include-regex, empty = all
 filesystem-dedupe-devices = true                        # collapse bind mounts
-collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
+collectors = ["cpu", "memory", "disk", "filesystem", "md", "netdev", "loadavg", "uname"]
 ```
 
 Bind mounts and other multi-mount setups produce one entry per mountpoint in `/proc/self/mountinfo`. With `filesystem-dedupe-devices` on (default), only one entry per block device is reported — the entry whose `root` is `/` wins, with lexicographic mountpoint as a tie-breaker. A hardcoded floor always skips pseudo-filesystems (`proc`, `sysfs`, `tmpfs`, `cgroup`, ...) before any user filter applies.
@@ -94,9 +94,12 @@ Metric names follow [node_exporter](https://github.com/prometheus/node_exporter)
 | `memory` | `node_memory_MemTotal_bytes`, `node_memory_MemFree_bytes`, `node_memory_MemAvailable_bytes`, ... (gauge) |
 | `disk` | `node_disk_reads_completed_total`, `node_disk_read_bytes_total`, `node_disk_writes_completed_total`, `node_disk_written_bytes_total`, `node_disk_io_time_seconds_total`, `node_disk_discards_completed_total`, `node_disk_flush_requests_total`, ... (counter, label: `device`) |
 | `filesystem` | `node_filesystem_size_bytes`, `node_filesystem_free_bytes`, `node_filesystem_avail_bytes`, `node_filesystem_files`, `node_filesystem_files_free` (gauge, labels: `device`, `mountpoint`, `fstype`) |
+| `md` | `node_md_degraded`, `node_md_disks_required`, `node_md_blocks`, `node_md_blocks_synced`, `node_md_mismatch_cnt`, `node_md_sync_speed_bytes`, `node_md_chunk_size_bytes` (gauge, label: `device`); `node_md_disks` (gauge, labels: `device`, `state`=`active`/`failed`/`spare`); `node_md_state` (gauge 0/1, labels: `device`, `state`); `node_md_info` (gauge=1, labels: `device`, `level`, `metadata_version`, `uuid`, `consistency_policy`); `node_md_last_sync_action` (gauge=1, labels: `device`, `action`); `node_md_disk_state` (gauge=1, labels: `device`, `disk`, `state`); `node_md_disk_errors_total` (counter, labels: `device`, `disk`); `node_md_disk_bad_blocks`, `node_md_disk_unacknowledged_bad_blocks`, `node_md_disk_size_bytes`, `node_md_disk_slot` (gauge, labels: `device`, `disk`) |
 | `netdev` | `node_network_receive_bytes_total`, `node_network_transmit_bytes_total`, `node_network_receive_packets_total`, ... (counter, label: `device`) |
 | `loadavg` | `node_load1`, `node_load5`, `node_load15` (gauge) |
 | `uname` | `node_uname_info` (gauge=1, labels: `sysname`, `release`, `version`, `machine`, `nodename`) |
+
+The `md` sub-collector reads `/sys/block/md*/md/`, which is world-readable — no privileges beyond the sandbox, and no `mdadm` subprocess. It costs one `stat` on hosts without software RAID: an absent `/proc/mdstat` means the md module isn't loaded and the sub-collector returns immediately. Array I/O throughput is not part of it — `md0` appears in `/proc/diskstats`, so widen `disk-devices` (e.g. `^(nvme\\d+n\\d+|sd[a-z]+|vd[a-z]+|md\\d+)$`) to get it from the `disk` sub-collector.
 
 #### Prometheus scraper
 

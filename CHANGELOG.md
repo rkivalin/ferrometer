@@ -4,6 +4,8 @@
 
 ### Features
 
+- New `md` sub-collector on the unix collector, enabled by default, reporting Linux software-RAID state from `/sys/block/md*/md/`: `node_md_degraded`, `node_md_disks{state}`, `node_md_disks_required`, `node_md_state{state}`, `node_md_blocks`, `node_md_blocks_synced`, `node_md_sync_speed_bytes`, `node_md_mismatch_cnt` (silent-corruption count from the last scrub), `node_md_chunk_size_bytes`, `node_md_info`, `node_md_last_sync_action`, and a per-member family — `node_md_disk_state`, `node_md_disk_errors_total` (read errors md corrected without evicting the device), `node_md_disk_bad_blocks`, `node_md_disk_unacknowledged_bad_blocks`, `node_md_disk_size_bytes`, `node_md_disk_slot`. Names match node_exporter's mdadm collector where it has an equivalent; the rest come from sysfs attributes `/proc/mdstat` does not carry. Everything read is world-readable, so no extra privileges and no `mdadm` subprocess are needed. Hosts with no md array pay one `stat` per tick.
+
 ### Fixes
 
 ### Changes

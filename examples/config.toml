@@ -29,7 +29,8 @@ interval = "15s"
 # Hard deadline per collect() call. /proc reads are effectively instant; the
 # default leaves headroom for statvfs on stale network mounts. (default: "5s")
 max-runtime = "5s"
-# Regex filter for disk devices. Only matching devices are reported.
+# Regex filter for disk devices. Only matching devices are reported. Add
+# md\\d+ to also report array-level I/O for software RAID devices.
 disk-devices = "^(nvme\\d+n\\d+|sd[a-z]+|vd[a-z]+)$"
 # Regex filter for network interfaces.
 net-devices = "^(eth|en|wl|bond)"
@@ -39,8 +40,9 @@ filesystem-mount-points = ""
 filesystem-fs-types = ""
 # Collapse mounts that share a block device down to one canonical entry.
 filesystem-dedupe-devices = true
-# Sub-collectors to enable (default: all).
-collectors = ["cpu", "memory", "disk", "filesystem", "netdev", "loadavg", "uname"]
+# Sub-collectors to enable (default: all). "md" reads software-RAID state
+# from /sys/block/md*/md and is a no-op on hosts without an md array.
+collectors = ["cpu", "memory", "disk", "filesystem", "md", "netdev", "loadavg", "uname"]
 
 # Static labels added to every emitted metric.
 # [metrics.collectors.system.static-labels]

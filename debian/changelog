@@ -1,8 +1,18 @@
 ferrometer (0.5.0-1) unstable; urgency=low
 
-  * No changes
+  * New `md` sub-collector (unix collector, on by default) reporting Linux
+    software-RAID state from /sys/block/md*/md: node_md_degraded,
+    node_md_disks{state}, node_md_disks_required, node_md_state{state},
+    node_md_blocks, node_md_blocks_synced, node_md_sync_speed_bytes,
+    node_md_mismatch_cnt, node_md_chunk_size_bytes, node_md_info,
+    node_md_last_sync_action, plus a per-member family (node_md_disk_state,
+    node_md_disk_errors_total, node_md_disk_bad_blocks,
+    node_md_disk_unacknowledged_bad_blocks, node_md_disk_size_bytes,
+    node_md_disk_slot). Names match node_exporter's mdadm collector where it
+    has an equivalent. No privileges and no mdadm subprocess; hosts with no
+    md array pay one stat per tick.
 
- -- Roman Kivalin <roman@shl.dev>  Wed, 19 Aug 2026 00:00:00 +0000
+ -- Roman Kivalin <roman@shl.dev>  Sat, 29 Aug 2026 00:00:00 +0000
 
 ferrometer (0.4.0-1) unstable; urgency=low
 
