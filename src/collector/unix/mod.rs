@@ -10,6 +10,7 @@ use crate::signal::{Labels, Metric};
 mod cpu;
 mod disk;
 mod filesystem;
+mod hwmon;
 mod loadavg;
 mod md;
 mod memory;
@@ -25,6 +26,7 @@ pub struct UnixCollector {
     fs_mount_filter: Regex,
     fs_type_filter: Regex,
     fs_dedupe_devices: bool,
+    hwmon_filter: Regex,
     cache: LabelCache,
 }
 
@@ -51,6 +53,9 @@ impl UnixCollector {
                 crate::error::Error::Config(format!("invalid filesystem-fs-types regex: {e}"))
             })?,
             fs_dedupe_devices: config.filesystem_dedupe_devices,
+            hwmon_filter: Regex::new(&config.hwmon_chips).map_err(|e| {
+                crate::error::Error::Config(format!("invalid hwmon-chips regex: {e}"))
+            })?,
             cache: LabelCache::new(base),
         })
     }
@@ -75,6 +80,7 @@ impl Collector for UnixCollector {
                     .await?
                 }
                 "md" => md::collect(&mut self.cache)?,
+                "hwmon" => hwmon::collect(&mut self.cache, &self.hwmon_filter)?,
                 "netdev" => netdev::collect(&mut self.cache, &self.net_filter)?,
                 "loadavg" => loadavg::collect(&mut self.cache)?,
                 "uname" => uname::collect(&mut self.cache)?,

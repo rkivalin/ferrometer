@@ -1,5 +1,18 @@
 ferrometer (0.5.0-1) unstable; urgency=low
 
+  * New `hwmon` sub-collector (unix collector, on by default) exporting
+    /sys/class/hwmon sensors under node_exporter's names:
+    node_hwmon_temp_celsius, node_hwmon_fan_rpm, node_hwmon_in_volts,
+    node_hwmon_curr_amps, node_hwmon_power_watt, node_hwmon_humidity,
+    node_hwmon_energy_joule_total, their _min_/_max_/_crit_ threshold
+    variants, the _alarm/_crit_alarm flags, node_hwmon_sensor_label and
+    node_hwmon_chip_names. Series carry a `disk` label when the chip belongs
+    to exactly one block device, so a drive temperature joins with
+    node_disk_* and node_md_disk_*. NVMe works out of the box; SATA/SAS
+    needs the drivetemp module loaded. No daemon and no privileges: this
+    replaces what the unmaintained hddtemp service was for. New
+    `hwmon-chips` include-regex narrows collection (a many-core coretemp
+    chip is over a hundred series on its own).
   * New `md` sub-collector (unix collector, on by default) reporting Linux
     software-RAID state from /sys/block/md*/md: node_md_degraded,
     node_md_disks{state}, node_md_disks_required, node_md_state{state},

@@ -386,6 +386,10 @@ pub struct UnixCollectorConfig {
     /// down to a single canonical entry. Default true.
     #[serde(default = "default_true")]
     pub filesystem_dedupe_devices: bool,
+    /// Include-regex over hwmon chip labels. Empty (the default) matches all;
+    /// a host with many sensor chips can narrow to e.g. "^(nvme|drivetemp)".
+    #[serde(default)]
+    pub hwmon_chips: String,
     #[serde(default = "default_unix_collectors")]
     pub collectors: Vec<String>,
     /// Static labels added to every emitted metric. Nothing is auto-injected;
@@ -472,6 +476,7 @@ fn default_unix_collectors() -> Vec<String> {
         "disk",
         "filesystem",
         "md",
+        "hwmon",
         "netdev",
         "loadavg",
         "uname",
@@ -716,6 +721,9 @@ impl Config {
                     "collector {name}: invalid filesystem-fs-types regex: {e}"
                 ))
             })?;
+            regex::Regex::new(&config.hwmon_chips).map_err(|e| {
+                Error::Config(format!("collector {name}: invalid hwmon-chips regex: {e}"))
+            })?;
         }
         #[cfg(not(feature = "collector-unix"))]
         let _ = config;
@@ -726,6 +734,7 @@ impl Config {
             "disk",
             "filesystem",
             "md",
+            "hwmon",
             "netdev",
             "loadavg",
             "uname",

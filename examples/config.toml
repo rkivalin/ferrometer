@@ -40,9 +40,15 @@ filesystem-mount-points = ""
 filesystem-fs-types = ""
 # Collapse mounts that share a block device down to one canonical entry.
 filesystem-dedupe-devices = true
+# hwmon chip include-regex. Empty (default) matches all chips the host
+# registers. A many-core coretemp chip alone is over a hundred series, so
+# narrow to e.g. "^nvme" or "drivetemp" if only drive temperatures matter.
+hwmon-chips = ""
 # Sub-collectors to enable (default: all). "md" reads software-RAID state
 # from /sys/block/md*/md and is a no-op on hosts without an md array.
-collectors = ["cpu", "memory", "disk", "filesystem", "md", "netdev", "loadavg", "uname"]
+# "hwmon" reads /sys/class/hwmon sensors; SATA drive temperatures need the
+# drivetemp module loaded (NVMe works out of the box).
+collectors = ["cpu", "memory", "disk", "filesystem", "md", "hwmon", "netdev", "loadavg", "uname"]
 
 # Static labels added to every emitted metric.
 # [metrics.collectors.system.static-labels]

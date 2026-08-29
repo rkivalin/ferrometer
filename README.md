@@ -6,7 +6,7 @@ A minimal alternative to Grafana Alloy and the OpenTelemetry Collector for hosts
 
 ## Features
 
-- **Unix system metrics** from `/proc` and `/sys` — CPU (incl. frequency / governor / thermal throttle), memory, disk (incl. discards and flushes), filesystem, network, load average, software RAID, uname.
+- **Unix system metrics** from `/proc` and `/sys` — CPU (incl. frequency / governor / thermal throttle), memory, disk (incl. discards and flushes), filesystem, network, load average, software RAID, hwmon sensors (drive / CPU / DIMM temperatures, fans, voltages), uname.
 - **Prometheus scraper** for any text-exposition `/metrics` endpoint.
 - **systemd journal source**, cursor-persisted across restarts so no entries get re-shipped or skipped. Journald is the durable buffer during a sink outage — no in-memory queue.
 - **OTLP HTTP forwarder** (VictoriaMetrics, Grafana Mimir, etc.) with gzip compression, an in-memory ring buffer for outage tolerance, and exponential backoff.
@@ -81,7 +81,8 @@ net-devices = "^(eth|en|wl|bond)"
 filesystem-mount-points = ""                            # include-regex, empty = all
 filesystem-fs-types = ""                                # include-regex, empty = all
 filesystem-dedupe-devices = true                        # collapse bind mounts
-collectors = ["cpu", "memory", "disk", "filesystem", "md", "netdev", "loadavg", "uname"]
+hwmon-chips = ""                                        # include-regex, empty = all
+collectors = ["cpu", "memory", "disk", "filesystem", "md", "hwmon", "netdev", "loadavg", "uname"]
 ```
 
 Bind mounts and other multi-mount setups produce one entry per mountpoint in `/proc/self/mountinfo`. With `filesystem-dedupe-devices` on (default), only one entry per block device is reported — the entry whose `root` is `/` wins, with lexicographic mountpoint as a tie-breaker. A hardcoded floor always skips pseudo-filesystems (`proc`, `sysfs`, `tmpfs`, `cgroup`, ...) before any user filter applies.
@@ -95,11 +96,16 @@ Metric names follow [node_exporter](https://github.com/prometheus/node_exporter)
 | `disk` | `node_disk_reads_completed_total`, `node_disk_read_bytes_total`, `node_disk_writes_completed_total`, `node_disk_written_bytes_total`, `node_disk_io_time_seconds_total`, `node_disk_discards_completed_total`, `node_disk_flush_requests_total`, ... (counter, label: `device`) |
 | `filesystem` | `node_filesystem_size_bytes`, `node_filesystem_free_bytes`, `node_filesystem_avail_bytes`, `node_filesystem_files`, `node_filesystem_files_free` (gauge, labels: `device`, `mountpoint`, `fstype`) |
 | `md` | `node_md_degraded`, `node_md_disks_required`, `node_md_blocks`, `node_md_blocks_synced`, `node_md_mismatch_cnt`, `node_md_sync_speed_bytes`, `node_md_chunk_size_bytes` (gauge, label: `device`); `node_md_disks` (gauge, labels: `device`, `state`=`active`/`failed`/`spare`); `node_md_state` (gauge 0/1, labels: `device`, `state`); `node_md_info` (gauge=1, labels: `device`, `level`, `metadata_version`, `uuid`, `consistency_policy`); `node_md_last_sync_action` (gauge=1, labels: `device`, `action`); `node_md_disk_state` (gauge=1, labels: `device`, `disk`, `state`); `node_md_disk_errors_total` (counter, labels: `device`, `disk`); `node_md_disk_bad_blocks`, `node_md_disk_unacknowledged_bad_blocks`, `node_md_disk_size_bytes`, `node_md_disk_slot` (gauge, labels: `device`, `disk`) |
+| `hwmon` | `node_hwmon_temp_celsius`, `node_hwmon_fan_rpm`, `node_hwmon_in_volts`, `node_hwmon_curr_amps`, `node_hwmon_power_watt`, `node_hwmon_humidity` (gauge, labels: `chip`, `sensor`, plus `disk` where the chip is a drive); `node_hwmon_energy_joule_total` (counter); the `_min_`/`_max_`/`_crit_` threshold variants of each (e.g. `node_hwmon_temp_crit_celsius`); `node_hwmon_temp_alarm`, `node_hwmon_temp_crit_alarm` (gauge 0/1); `node_hwmon_sensor_label` (gauge=1, labels: `chip`, `sensor`, `label`); `node_hwmon_chip_names` (gauge=1, labels: `chip`, `chip_name`) |
 | `netdev` | `node_network_receive_bytes_total`, `node_network_transmit_bytes_total`, `node_network_receive_packets_total`, ... (counter, label: `device`) |
 | `loadavg` | `node_load1`, `node_load5`, `node_load15` (gauge) |
 | `uname` | `node_uname_info` (gauge=1, labels: `sysname`, `release`, `version`, `machine`, `nodename`) |
 
 The `md` sub-collector reads `/sys/block/md*/md/`, which is world-readable — no privileges beyond the sandbox, and no `mdadm` subprocess. It costs one `stat` on hosts without software RAID: an absent `/proc/mdstat` means the md module isn't loaded and the sub-collector returns immediately. Array I/O throughput is not part of it — `md0` appears in `/proc/diskstats`, so widen `disk-devices` (e.g. `^(nvme\\d+n\\d+|sd[a-z]+|vd[a-z]+|md\\d+)$`) to get it from the `disk` sub-collector.
+
+The `hwmon` sub-collector reads `/sys/class/hwmon` — no daemon and no privileges, so drive temperatures need neither the (long-unmaintained) `hddtemp` service nor a `smartctl` subprocess. NVMe drives register a chip from the `nvme` driver automatically; **SATA/SAS drives need the `drivetemp` module, which does not autoload** — `modprobe drivetemp` plus a `/etc/modules-load.d/` entry. USB-attached disks are not reachable either way. The same loop picks up CPU, DIMM, GPU and chassis sensors, which is why `hwmon-chips` exists: a many-core `coretemp` chip alone accounts for well over a hundred series, and `hwmon-chips = "^nvme"` (or `"drivetemp"`) narrows collection to drives.
+
+The `chip` label identifies the device the sensors hang off (`nvme_nvme0`, `platform_coretemp_0`) rather than the `hwmonN` index, which the kernel assigns at probe time and reshuffles across reboots. Unset NVMe temperature limits — the 0 K / 65535 K sentinels the driver reports as -273.15 C and 65261.85 C — are dropped rather than exported.
 
 #### Prometheus scraper
 
